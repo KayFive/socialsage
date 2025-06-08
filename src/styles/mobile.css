@@ -1,0 +1,218 @@
+/* Mobile Dashboard Specific Styles */
+
+/* Mobile container adjustments */
+.mobile-container {
+  max-width: 375px;
+  margin: 0 auto;
+  background: white;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  border-radius: 1.5rem;
+  overflow: hidden;
+  height: 100vh;
+  position: relative;
+}
+
+/* Status bar simulation */
+.mobile-status-bar {
+  background: #000;
+  color: white;
+  font-size: 0.75rem;
+  padding: 0.25rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 500;
+}
+
+/* Safe area padding for bottom navigation */
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0.5rem);
+}
+
+/* Smooth scrolling for mobile */
+.mobile-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Custom gradient backgrounds for metric categories */
+.gradient-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+.gradient-blue { background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); }
+.gradient-orange { background: linear-gradient(135deg, #fb923c 0%, #ef4444 100%); }
+.gradient-purple { background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%); }
+.gradient-teal { background: linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%); }
+.gradient-yellow { background: linear-gradient(135deg, #fbbf24 0%, #f97316 100%); }
+
+/* Enhanced touch targets for mobile */
+.mobile-touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Chat bubble animations */
+.chat-bubble-enter {
+  animation: slideInLeft 0.3s ease-out;
+}
+
+.chat-bubble-user {
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Metric trend indicators */
+.trend-up {
+  background: #10b981;
+  animation: pulse-green 2s infinite;
+}
+
+.trend-down {
+  background: #ef4444;
+  animation: pulse-red 2s infinite;
+}
+
+.trend-neutral {
+  background: #6b7280;
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Loading spinner for AI analysis */
+.ai-spinner {
+  border: 2px solid #e5e7eb;
+  border-top: 2px solid #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Platform badge styles */
+.platform-instagram {
+  background: linear-gradient(45deg, #e91e63, #ff9800);
+}
+
+.platform-twitter {
+  background: linear-gradient(45deg, #1f2937, #000000);
+}
+
+.platform-linkedin {
+  background: linear-gradient(45deg, #2563eb, #1d4ed8);
+}
+
+/* Performance indicators */
+.performance-high {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.performance-medium {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.performance-low {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+/* Tab navigation enhancements */
+.tab-active {
+  background: #eff6ff;
+  color: #2563eb;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.tab-inactive {
+  color: #6b7280;
+  transition: all 0.2s ease-in-out;
+}
+
+.tab-inactive:hover {
+  color: #374151;
+  transform: translateY(-0.5px);
+}
+
+/* Notification styles */
+.notification-ai { background: #eff6ff; }
+.notification-engagement { background: #f0fdf4; }
+.notification-content { background: #faf5ff; }
+.notification-performance { background: #fff7ed; }
+.notification-trending { background: #fdf2f8; }
+
+/* Card hover effects */
+.metric-card {
+  transition: all 0.2s ease-in-out;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+/* Responsive adjustments */
+@media (max-width: 375px) {
+  .mobile-container {
+    max-width: 100%;
+    border-radius: 0;
+  }
+}
+
+/* Dark mode support (optional) */
+@media (prefers-color-scheme: dark) {
+  .mobile-container {
+    background: #1f2937;
+    color: #f9fafb;
+  }
+  
+  .bg-white {
+    background: #374151 !important;
+  }
+  
+  .text-gray-900 {
+    color: #f9fafb !important;
+  }
+  
+  .text-gray-600 {
+    color: #d1d5db !important;
+  }
+  
+  .border-gray-200 {
+    border-color: #4b5563 !important;
+  }
+}

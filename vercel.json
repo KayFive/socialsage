@@ -1,0 +1,20 @@
+{
+  "crons": [
+    {
+      "path": "/api/sync/daily",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/sync/token-refresh", 
+      "schedule": "0 12 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/sync/daily/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/sync/token-refresh/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

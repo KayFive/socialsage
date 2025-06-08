@@ -1,0 +1,41 @@
+{
+  "name": "socialsage",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "supabase gen types typescript --project-id YOUR_PROJECT_ID > src/types/supabase.ts",
+    "db:migrate": "supabase db push",
+    "sync:daily": "curl -X POST http://localhost:3000/api/sync/daily -H 'Authorization: Bearer your_cron_secret_key'",
+    "sync:tokens": "curl -X POST http://localhost:3000/api/sync/token-refresh -H 'Authorization: Bearer your_cron_secret_key'"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^9.8.0",
+    "@supabase/auth-ui-react": "^0.4.7",
+    "@supabase/auth-ui-shared": "^0.1.8",
+    "@supabase/ssr": "^0.6.1",
+    "@supabase/supabase-js": "^2.49.4",
+    "chart.js": "^4.4.9",
+    "lucide-react": "^0.511.0",
+    "mixpanel-browser": "^2.65.0",
+    "next": "^15.3.3",
+    "pdf-lib": "^1.17.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vercel": "^42.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/chart.js": "^2.9.41",
+    "@types/mixpanel-browser": "^2.60.0",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.4",
+    "tailwindcss": "^4.1.8",
+    "typescript": "5.8.3"
+  }
+}
