@@ -2,6 +2,7 @@
 // Historical data service for your flat structure
 
 import { createClient } from '../lib/supabaseServer';
+import browserClient from '../lib/supabaseClient';
 
 export interface HistoricalSnapshot {
   id: string;
@@ -42,6 +43,19 @@ export interface PostSnapshot {
 }
 
 export class HistoricalDataService {
+  private isServer: boolean;
+
+  constructor() {
+    this.isServer = typeof window === 'undefined';
+  }
+
+  private async getSupabase() {
+    if (this.isServer) {
+      return await createClient();
+    }
+    return browserClient;
+  }
+
   /**
    * Get historical snapshots for a user's Instagram account (using your schema)
    */
@@ -49,7 +63,7 @@ export class HistoricalDataService {
     userId: string, 
     days: number = 30
   ): Promise<HistoricalSnapshot[]> {
-    const supabase = await createClient();
+    const supabase = await this.getSupabase();
     
     const { data, error } = await supabase
       .from('daily_snapshots')
@@ -172,7 +186,7 @@ export class HistoricalDataService {
    * Get post performance history
    */
   async getPostHistory(userId: string, days: number = 30): Promise<PostSnapshot[]> {
-    const supabase = await createClient();
+    const supabase = await this.getSupabase();
     
     const { data, error } = await supabase
       .from('post_snapshots')
@@ -226,7 +240,7 @@ export class HistoricalDataService {
    * Get top performing posts from history
    */
   async getTopPerformingPosts(userId: string, limit: number = 10) {
-    const supabase = await createClient();
+    const supabase = await this.getSupabase();
     
     const { data, error } = await supabase
       .from('post_snapshots')
@@ -315,7 +329,7 @@ export class HistoricalDataService {
    * Get user's Instagram account info (using your schema)
    */
   async getUserInstagramAccount(userId: string) {
-    const supabase = await createClient();
+    const supabase = await this.getSupabase();
     
     const { data, error } = await supabase
       .from('instagram_accounts')
@@ -343,7 +357,7 @@ export class HistoricalDataService {
    * Get latest sync information for a user
    */
   async getLatestSyncInfo(userId: string) {
-    const supabase = await createClient();
+    const supabase = await this.getSupabase();
     
     const { data, error } = await supabase
       .from('sync_logs')
@@ -367,7 +381,7 @@ export class HistoricalDataService {
    * Get sync history for monitoring
    */
   async getSyncHistory(userId: string, limit: number = 10) {
-    const supabase = await createClient();
+    const supabase = await this.getSupabase();
     
     const { data, error } = await supabase
       .from('sync_logs')
