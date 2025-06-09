@@ -1,8 +1,8 @@
 // File: src/services/historicalDataService.ts
 // Historical data service for your flat structure
 
-import { createClient } from '../lib/supabaseServer';
 import browserClient from '../lib/supabaseClient';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface HistoricalSnapshot {
   id: string;
@@ -43,16 +43,9 @@ export interface PostSnapshot {
 }
 
 export class HistoricalDataService {
-  private isServer: boolean;
-
-  constructor() {
-    this.isServer = typeof window === 'undefined';
-  }
-
-  private async getSupabase() {
-    if (this.isServer) {
-      return await createClient();
-    }
+  private async getSupabase(): Promise<SupabaseClient> {
+    // Always use browser client for now to avoid build issues
+    // Server-side operations should use the server client directly in API routes
     return browserClient;
   }
 
