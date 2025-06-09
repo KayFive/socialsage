@@ -2,6 +2,7 @@
 // Instagram API service for your existing flat structure
 
 import { createClient } from '../lib/supabaseServer';
+import { createAdminClient } from '../lib/supabaseAdmin';
 
 export interface InstagramProfile {
   id: string;
@@ -154,7 +155,8 @@ export class InstagramDataService {
    * Create a daily snapshot of account data
    */
   async createDailySnapshot(instagramAccountId: string) {
-    const supabase = await createClient();
+    // Use admin client for all operations to bypass RLS
+    const supabase = createAdminClient();
     
     console.log(`📸 Creating daily snapshot for account ${instagramAccountId}`);
 
@@ -178,7 +180,8 @@ export class InstagramDataService {
       .insert({
         instagram_account_id: instagramAccountId,
         sync_type: 'full',
-        status: 'started'
+        status: 'started',
+        started_at: new Date().toISOString()
       })
       .select()
       .single();
@@ -287,7 +290,7 @@ export class InstagramDataService {
     posts: InstagramPost[],
     accessToken: string
   ) {
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     const snapshotDate = new Date().toISOString().split('T')[0];
     console.log(`📝 Saving ${posts.length} post snapshots for date ${snapshotDate}`);
 
@@ -376,9 +379,10 @@ export class InstagramDataService {
 
   /**
    * Get all active Instagram accounts for daily sync
+   * USES ADMIN CLIENT TO BYPASS RLS
    */
   async getActiveAccountsForSync() {
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     
     const { data, error } = await supabase
       .from('instagram_accounts')
@@ -397,7 +401,7 @@ export class InstagramDataService {
    * Get historical snapshots for an account
    */
   async getHistoricalSnapshots(instagramAccountId: string, days: number = 30) {
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     
     const { data, error } = await supabase
       .from('daily_snapshots')
@@ -485,7 +489,7 @@ export class InstagramDataService {
    * Get account by Instagram ID (using your column names)
    */
   async getAccountByInstagramId(instagramId: string) {
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     
     const { data, error } = await supabase
       .from('instagram_accounts')
@@ -536,7 +540,7 @@ export class InstagramDataService {
    * Update account token after refresh
    */
   async updateAccountToken(accountId: string, newAccessToken: string, expiresIn: number) {
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     
     const expiresAt = new Date();
     expiresAt.setSeconds(expiresAt.getSeconds() + expiresIn);
