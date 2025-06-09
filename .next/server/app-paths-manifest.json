@@ -1,5 +1,6 @@
 {
-  "/_not-found/page": "app/_not-found/page.js",
   "/manifest.json/route": "app/manifest.json/route.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
   "/mobile/page": "app/mobile/page.js"
 }

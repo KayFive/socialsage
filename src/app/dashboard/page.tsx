@@ -234,9 +234,19 @@ export default function Dashboard() {
                   <div className="flex items-center space-x-2">
                     <div className="flex items-center space-x-2 bg-green-50 border border-green-200 rounded-lg px-3 py-1">
                       <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="text-sm text-green-700 font-medium">
-                        @{instagramConnection.instagram_handle}
-                      </span>
+                      <div className="flex flex-col">
+                        <span className="text-sm text-green-700 font-medium">
+                          @{instagramConnection.instagram_handle}
+                        </span>
+                        {/* Show account type if available */}
+                        {instagramConnection.account_type && (
+                          <span className="text-xs text-green-600">
+                            {instagramConnection.account_type === 'BUSINESS' ? '💼 Business' : 
+                             instagramConnection.account_type === 'CREATOR' ? '🎨 Creator' : 
+                             '👤 Personal'} Account
+                          </span>
+                        )}
+                      </div>
                       {instagramConnections.length > 1 && (
                         <span className="text-xs text-gray-500">
                           +{instagramConnections.length - 1} more
@@ -300,7 +310,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="space-y-8">
-              {/* Profile Header - Similar to Reports Page */}
+              {/* Profile Header - Updated with Account Type */}
               {reports.length > 0 && reports[0].status === 'completed' && reports[0].report_data && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
                   <div className="flex items-center justify-between mb-8">
@@ -341,10 +351,52 @@ export default function Dashboard() {
                         <p className="text-lg text-gray-600">
                           @{reports[0].report_data.profile?.username || 'unknown'}
                         </p>
-                        <span className="inline-block px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm font-medium mt-1">
-                          {reports[0].report_data.profile?.category || 
-                           reports[0].report_data.profile?.account_type || 'PERSONAL'}
-                        </span>
+                        
+                        {/* Account Type and Business Category Badges */}
+                        <div className="flex items-center gap-2 mt-2">
+                          {/* Account Type Badge - Fixed for Creator accounts */}
+                          <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
+                            reports[0].report_data.profile?.account_type === 'BUSINESS' 
+                              ? 'bg-blue-100 text-blue-800 border border-blue-200' 
+                              : reports[0].report_data.profile?.account_type === 'CREATOR'
+                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                              : 'bg-gray-100 text-gray-700 border border-gray-200'
+                          }`}>
+                            <span className="mr-1">
+                              {reports[0].report_data.profile?.account_type === 'BUSINESS' ? '💼' : 
+                               reports[0].report_data.profile?.account_type === 'CREATOR' ? '🎨' : '👤'}
+                            </span>
+                            {reports[0].report_data.profile?.account_type || 'PERSONAL'} ACCOUNT
+                          </span>
+                          
+                          {/* Business/Creator Category Badge (if available) */}
+                          {reports[0].report_data.profile?.category && (
+                            <span className="inline-block px-3 py-1 bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-full text-sm font-medium">
+                              <span className="mr-1">
+                                {reports[0].report_data.profile?.category.toLowerCase().includes('photo') ? '📸' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('art') ? '🎨' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('music') ? '🎵' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('video') ? '🎥' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('blog') ? '✍️' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('fitness') ? '💪' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('food') ? '🍴' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('fashion') ? '👗' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('travel') ? '✈️' :
+                                 reports[0].report_data.profile?.category.toLowerCase().includes('tech') ? '💻' :
+                                 '📊'}
+                              </span>
+                              {reports[0].report_data.profile.category}
+                            </span>
+                          )}
+                          
+                          {/* Verified Badge (if applicable) */}
+                          {reports[0].report_data.profile?.is_verified && (
+                            <span className="inline-block px-3 py-1 bg-green-100 text-green-800 border border-green-200 rounded-full text-sm font-medium">
+                              <span className="mr-1">✓</span>
+                              Verified
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                     
