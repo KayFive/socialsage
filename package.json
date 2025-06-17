@@ -1,0 +1,36 @@
+{
+  "name": "socialsage-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "supabase gen types typescript --project-id xgvtcfskwbmcfytxblbj > src/types/supabase.ts",
+    "db:migrate": "supabase db push",
+    "sync:daily": "curl -X POST http://localhost:3000/api/sync/daily -H 'Authorization: Bearer your_cron_secret_key'",
+    "sync:tokens": "curl -X POST http://localhost:3000/api/sync/token-refresh -H 'Authorization: Bearer your_cron_secret_key'"
+  },
+  "dependencies": {
+    "@supabase/auth-ui-react": "^0.4.7",
+    "@supabase/auth-ui-shared": "^0.1.8",
+    "@supabase/ssr": "^0.6.1",
+    "@supabase/supabase-js": "^2.49.4",
+    "date-fns": "^3.6.0",
+    "lucide-react": "^0.511.0",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tsconfig/node18": "^18.2.4",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.4",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.8.3"
+  }
+}
