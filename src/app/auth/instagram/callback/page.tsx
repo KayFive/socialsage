@@ -1,11 +1,31 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@supabase/ssr'
 import { AuthService } from '@/lib/auth'
 
-export default function InstagramCallback() {
+// Loading component
+function LoadingSpinner() {
+  return (
+    <div className="max-w-sm mx-auto bg-white shadow-2xl rounded-3xl overflow-hidden h-screen flex flex-col">
+      <div className="bg-black text-white text-xs px-4 py-1 flex justify-between items-center">
+        <span>9:41</span>
+        <span className="font-semibold">SocialSage</span>
+        <span>100%</span>
+      </div>
+      
+      <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
+        <div className="animate-spin w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full mb-4"></div>
+        <h2 className="text-xl font-bold text-gray-900 mb-2">Loading...</h2>
+        <p className="text-gray-600 text-center">Please wait...</p>
+      </div>
+    </div>
+  )
+}
+
+// Main callback component that uses useSearchParams
+function InstagramCallbackContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
@@ -227,5 +247,14 @@ export default function InstagramCallback() {
         </button>
       </div>
     </div>
+  )
+}
+
+// Main export component with Suspense wrapper
+export default function InstagramCallback() {
+  return (
+    <Suspense fallback={<LoadingSpinner />}>
+      <InstagramCallbackContent />
+    </Suspense>
   )
 }
