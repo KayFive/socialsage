@@ -46,26 +46,44 @@ export async function POST(request: NextRequest) {
       // Continue anyway, as this might be the first account
     }
 
-    // Prepare the account data
-    const instagramAccountData = {
+    // Prepare the account data - ONLY using fields that exist in your schema
+    type InstagramAccountData = {
+      user_id: any
+      instagram_id: any
+      instagram_handle: any
+      username: any
+      access_token: any
+      is_active: boolean
+      account_type: any
+      created_at: string
+      updated_at: string
+      token_expires_at?: string
+    }
+
+    const instagramAccountData: InstagramAccountData = {
       user_id: userId,
       instagram_id: accountData.user_id || accountData.id,
-      username: accountData.username,
+      instagram_handle: accountData.username || 'unknown', // Using instagram_handle from your schema
+      username: accountData.username || 'unknown',         // Using username from your schema
       access_token: accountData.access_token,
-      token_type: accountData.token_type || 'bearer',
       is_active: true,
-      token_expires_at: accountData.expires_in 
-        ? new Date(Date.now() + accountData.expires_in * 1000).toISOString()
-        : null,
+      account_type: accountData.account_type || 'BUSINESS', // This field exists in your schema
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
+    }
+
+    // Only add token_expires_at if we have expiration data (this field exists in your schema)
+    if (accountData.expires_in) {
+      instagramAccountData.token_expires_at = new Date(Date.now() + accountData.expires_in * 1000).toISOString()
     }
 
     console.log('💾 Saving Instagram account data:', {
       userId: instagramAccountData.user_id,
       instagramId: instagramAccountData.instagram_id,
       username: instagramAccountData.username,
-      hasAccessToken: !!instagramAccountData.access_token
+      instagram_handle: instagramAccountData.instagram_handle,
+      hasAccessToken: !!instagramAccountData.access_token,
+      accountType: instagramAccountData.account_type
     })
 
     // Insert the new account

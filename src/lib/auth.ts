@@ -171,6 +171,32 @@ export class AuthService {
     }
   }
 
+  static async disconnectInstagramAccount(userId: string): Promise<void> {
+    console.log('🔌 Disconnecting Instagram account for user:', userId)
+    
+    try {
+      const response = await fetch('/api/auth/instagram/disconnect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('❌ Instagram disconnect failed:', response.status, errorText)
+        throw new Error(`Failed to disconnect Instagram: ${errorText}`)
+      }
+
+      console.log('✅ Instagram account disconnected successfully')
+      
+    } catch (error) {
+      console.error('❌ Instagram disconnect error:', error)
+      throw error
+    }
+  }
+
   static async refreshInstagramToken(accountId: string): Promise<void> {
     console.log('🔄 Refreshing Instagram token for account:', accountId)
     

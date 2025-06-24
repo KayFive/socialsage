@@ -142,6 +142,27 @@ interface InstagramData {
     profile_visits: number;
     impressions: number;
   };
+  growthData?: {
+    canCalculateWeekly: boolean;
+    canCalculateMonthly: boolean;
+    daysOfData: number;
+    dataAvailableSince: string | null;
+    daysUntilWeekly: number;
+    daysUntilMonthly: number;
+  };
+  // NEW: Historical data from daily_snapshots table
+  historicalData?: {
+    weekly: Array<{
+      date: string;
+      followers: number;
+      isComplete: boolean;
+    }>;
+    monthly: Array<{
+      date: string;
+      followers: number;
+      isComplete: boolean;
+    }>;
+  };
 }
 
 // NEW: Interfaces for timing and frequency data
@@ -186,7 +207,7 @@ interface FrequencyData {
   }[];
 }
 
-type TimeFrame = 'weekly' | 'monthly' | 'annual';
+type TimeFrame = 'weekly' | 'monthly';
 type PostsTimeFrame = 'weekly' | 'monthly' | 'annual';
 type Performance = 'high' | 'medium' | 'low';
 type Status = 'excellent' | 'strong' | 'opportunity' | 'normal';
@@ -201,30 +222,19 @@ const SocialSageMobile = () => {
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
 
-  // Replace the original useEffect that fetches Instagram data with this updated version
+  // Fetch real Instagram data
   useEffect(() => {
     const fetchInstagramData = async () => {
-      console.log('🚀 SocialSage: Starting to fetch Instagram data...');
+      console.log('📡 SocialSage: Fetching Instagram data...');
+      setIsLoadingData(true);
+      
       try {
-        console.log('📡 SocialSage: Calling /api/instagram/metrics...');
         const response = await fetch('/api/instagram/metrics');
         console.log('📊 SocialSage: API Response status:', response.status);
         
         if (response.ok) {
           const data = await response.json();
           console.log('🔍 SocialSage: Instagram API Response:', data);
-          console.log('📱 SocialSage: Recent Posts:', data.recentPosts);
-          console.log('📈 SocialSage: Posts count:', data.recentPosts?.length || 0);
-          console.log('🔍 SocialSage: First post structure:', data.recentPosts?.[0]);
-          console.log('👥 SocialSage: Top Followers:', data.topFollowers);
-          console.log('🎯 SocialSage: Real insights available:', {
-            hasReach: data.recentPosts?.[0]?.reach > 0,
-            hasImpressions: data.recentPosts?.[0]?.impressions > 0,
-            hasProfileVisits: data.accountInsights?.profile_visits > 0,
-            totalReach: data.totalReach,
-            avgReach: data.avgReach,
-            topFollowersCount: data.topFollowers?.length || 0
-          });
           setInstagramData(data);
           setDataError(null);
         } else {
@@ -234,10 +244,10 @@ const SocialSageMobile = () => {
         }
       } catch (error) {
         console.error('❌ SocialSage: Failed to fetch Instagram data:', error);
-        setDataError('Network error while fetching data');
-      } finally {
-        setIsLoadingData(false);
+        setDataError('Network error while fetching data. Please check your Instagram connection.');
       }
+      
+      setIsLoadingData(false);
     };
 
     fetchInstagramData();
@@ -494,20 +504,17 @@ const SocialSageMobile = () => {
     return date.toLocaleDateString();
   };
 
-  // Helper function to calculate reach from real data or estimate
+  // Helper function to calculate reach from real data only
   const calculateReach = (post: InstagramPost) => {
-    if (post.reach) {
+    if (post.reach && post.reach > 0) {
       if (post.reach >= 1000) {
         return `${(post.reach / 1000).toFixed(1)}K`;
       }
       return post.reach.toString();
     }
     
-    const estimatedReach = (post.like_count + post.comments_count * 10) * 1.5;
-    if (estimatedReach >= 1000) {
-      return `${(estimatedReach / 1000).toFixed(1)}K`;
-    }
-    return estimatedReach.toString();
+    // Return -- if no real reach data available
+    return '--';
   };
 
   // Helper function to determine performance level
@@ -532,29 +539,23 @@ const SocialSageMobile = () => {
         color: 'from-green-400 to-emerald-500',
         metrics: [
           { 
-            name: 'Follower Growth Rate', 
-            value: instagramData?.growthRate || '+8.2%', 
-            trend: 'up' as 'up' 
-          },
-          { 
             name: 'Total Followers', 
-            value: instagramData?.followers?.toLocaleString() || '12.4K', 
-            trend: 'up' as 'up' 
+            value: instagramData?.followers?.toLocaleString() || '0', 
+            trend: 'neutral' as 'neutral'
           },
           { 
-            name: 'Profile Visits', 
-            value: instagramData?.accountInsights?.profile_visits?.toLocaleString() || '1.2K', 
-            trend: 'up' as 'up' 
+            name: 'Weekly Growth Rate', 
+            value: instagramData?.growthData?.canCalculateWeekly ? 
+              (instagramData.growthRate || '0%') : 
+              `Available in ${instagramData?.growthData?.daysUntilWeekly || 7}d`, 
+            trend: instagramData?.growthData?.canCalculateWeekly ? 'up' as 'up' : 'neutral' as 'neutral'
           },
           { 
-            name: 'Reach', 
-            value: instagramData?.accountInsights?.reach ? `${(instagramData.accountInsights.reach / 1000).toFixed(1)}K` : '15.3K', 
-            trend: 'up' as 'up' 
-          },
-          { 
-            name: 'Impressions', 
-            value: instagramData?.accountInsights?.impressions ? `${(instagramData.accountInsights.impressions / 1000).toFixed(1)}K` : '45.7K', 
-            trend: 'up' as 'up' 
+            name: 'Monthly Growth Rate', 
+            value: instagramData?.growthData?.canCalculateMonthly ? 
+              (instagramData.monthlyGrowth || '0%') : 
+              `Available in ${instagramData?.growthData?.daysUntilMonthly || 30}d`, 
+            trend: instagramData?.growthData?.canCalculateMonthly ? 'up' as 'up' : 'neutral' as 'neutral'
           }
         ]
       },
@@ -658,12 +659,12 @@ const SocialSageMobile = () => {
         emoji: '📊',
         description: 'Performance by format and content themes',
         color: 'from-teal-400 to-cyan-500',
-        metrics: [
-          { name: 'Reels vs Posts', value: 'Reels +67%', trend: 'up' as 'up' },
-          { name: 'Carousel Performance', value: '+23%', trend: 'up' as 'up' },
-          { name: 'Story Engagement', value: '+15%', trend: 'up' as 'up' },
-          { name: 'Tutorial Content', value: '+89%', trend: 'up' as 'up' },
-          { name: 'Behind-the-scenes', value: '+34%', trend: 'up' as 'up' }
+        metrics: instagramData?.recentPosts && instagramData.recentPosts.length > 0 ? [
+          { name: 'Content Types', value: `${new Set(instagramData.recentPosts.map(p => p.media_type)).size} types`, trend: 'neutral' as 'neutral' },
+          { name: 'Total Posts', value: instagramData.recentPosts.length.toString(), trend: 'neutral' as 'neutral' },
+          { name: 'Avg Engagement', value: Math.round((instagramData.avgLikes || 0) + (instagramData.avgComments || 0)).toString(), trend: 'up' as 'up' }
+        ] : [
+          { name: 'No Content Data', value: 'Connect account', trend: 'neutral' as 'neutral' }
         ]
       },
       {
@@ -679,11 +680,7 @@ const SocialSageMobile = () => {
             trend: 'up' as 'up'
           })) :
           [
-            { name: 'Sarah Chen (@sarahdesigns)', value: '47 interactions', trend: 'up' as 'up' },
-            { name: 'Mike Rodriguez (@mikecodes)', value: '32 interactions', trend: 'up' as 'up' },
-            { name: 'Emma Wilson (@emmawrites)', value: '28 interactions', trend: 'up' as 'up' },
-            { name: 'Alex Kumar (@alextech)', value: '24 interactions', trend: 'up' as 'up' },
-            { name: 'Luna Martinez (@lunacreatex)', value: '19 interactions', trend: 'up' as 'up' }
+            { name: 'No Engagement Data', value: 'Connect account', trend: 'neutral' as 'neutral' }
           ]
       }
     ];
@@ -698,48 +695,7 @@ const SocialSageMobile = () => {
       // Calculate content type performance from real data
       const getContentTypeData = () => {
         if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
-          // Fallback demo data
-          return [
-            {
-              type: 'Reel',
-              emoji: '🎬',
-              count: 8,
-              avgLikes: 420,
-              avgComments: 28,
-              avgReach: 1850,
-              avgShares: 12,
-              engagementRate: '5.8%',
-              color: 'from-purple-500 to-pink-500',
-              bgColor: 'from-purple-50 to-pink-50',
-              borderColor: 'border-purple-200'
-            },
-            {
-              type: 'Carousel',
-              emoji: '📸',
-              count: 5,
-              avgLikes: 380,
-              avgComments: 22,
-              avgReach: 1650,
-              avgShares: 8,
-              engagementRate: '4.9%',
-              color: 'from-blue-500 to-indigo-500',
-              bgColor: 'from-blue-50 to-indigo-50',
-              borderColor: 'border-blue-200'
-            },
-            {
-              type: 'Post',
-              emoji: '📝',
-              count: 12,
-              avgLikes: 295,
-              avgComments: 15,
-              avgReach: 1200,
-              avgShares: 5,
-              engagementRate: '3.8%',
-              color: 'from-green-500 to-emerald-500',
-              bgColor: 'from-green-50 to-emerald-50',
-              borderColor: 'border-green-200'
-            }
-          ];
+          return [];
         }
 
         // Group posts by type and calculate averages
@@ -827,142 +783,87 @@ const SocialSageMobile = () => {
               </p>
             </div>
 
-            {/* Content Type Rankings */}
-            <div className="space-y-4 mb-6">
-              {contentTypes.map((contentType, index) => (
-                <div key={contentType.type} className={`bg-gradient-to-br ${contentType.bgColor} ${contentType.borderColor} rounded-2xl p-4 shadow-sm border`}>
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 bg-gradient-to-br from-gray-700 to-gray-800 rounded-full flex items-center justify-center">
-                        <span className="text-white text-sm font-bold">#{index + 1}</span>
-                      </div>
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-2xl">{contentType.emoji}</span>
-                          <span className="text-lg font-bold text-gray-900">{contentType.type}</span>
+            {contentTypes.length > 0 ? (
+              <>
+                {/* Content Type Rankings */}
+                <div className="space-y-4 mb-6">
+                  {contentTypes.map((contentType, index) => (
+                    <div key={contentType.type} className={`bg-gradient-to-br ${contentType.bgColor} ${contentType.borderColor} rounded-2xl p-4 shadow-sm border`}>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-12 h-12 bg-gradient-to-br from-gray-700 to-gray-800 rounded-full flex items-center justify-center">
+                            <span className="text-white text-sm font-bold">#{index + 1}</span>
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="text-2xl">{contentType.emoji}</span>
+                              <span className="text-lg font-bold text-gray-900">{contentType.type}</span>
+                            </div>
+                            <div className="text-sm text-gray-600">{contentType.count} posts analyzed</div>
+                          </div>
                         </div>
-                        <div className="text-sm text-gray-600">{contentType.count} posts analyzed</div>
+                        <div className="text-right">
+                          <div className={`text-xl font-bold bg-gradient-to-r ${contentType.color} bg-clip-text text-transparent`}>
+                            {contentType.engagementRate}
+                          </div>
+                          <div className="text-xs text-gray-600">Engagement Rate</div>
+                        </div>
+                      </div>
+                      
+                      {/* Metrics Grid */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <Heart className="w-4 h-4 text-red-500" />
+                            <span className="text-sm font-semibold text-gray-900">{contentType.avgLikes}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Likes</div>
+                        </div>
+                        
+                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <MessageCircle className="w-4 h-4 text-blue-500" />
+                            <span className="text-sm font-semibold text-gray-900">{contentType.avgComments}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Comments</div>
+                        </div>
+                        
+                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <TrendingUp className="w-4 h-4 text-green-500" />
+                            <span className="text-sm font-semibold text-gray-900">
+                              {contentType.avgReach >= 1000 ? `${(contentType.avgReach / 1000).toFixed(1)}K` : contentType.avgReach}
+                            </span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Reach</div>
+                        </div>
+                        
+                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <Share className="w-4 h-4 text-purple-500" />
+                            <span className="text-sm font-semibold text-gray-900">{contentType.avgShares}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Shares</div>
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className={`text-xl font-bold bg-gradient-to-r ${contentType.color} bg-clip-text text-transparent`}>
-                        {contentType.engagementRate}
-                      </div>
-                      <div className="text-xs text-gray-600">Engagement Rate</div>
-                    </div>
-                  </div>
-                  
-                  {/* Metrics Grid */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                      <div className="flex items-center justify-center space-x-1 mb-1">
-                        <Heart className="w-4 h-4 text-red-500" />
-                        <span className="text-sm font-semibold text-gray-900">{contentType.avgLikes}</span>
-                      </div>
-                      <div className="text-xs text-gray-600">Avg Likes</div>
-                    </div>
-                    
-                    <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                      <div className="flex items-center justify-center space-x-1 mb-1">
-                        <MessageCircle className="w-4 h-4 text-blue-500" />
-                        <span className="text-sm font-semibold text-gray-900">{contentType.avgComments}</span>
-                      </div>
-                      <div className="text-xs text-gray-600">Avg Comments</div>
-                    </div>
-                    
-                    <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                      <div className="flex items-center justify-center space-x-1 mb-1">
-                        <TrendingUp className="w-4 h-4 text-green-500" />
-                        <span className="text-sm font-semibold text-gray-900">
-                          {contentType.avgReach >= 1000 ? `${(contentType.avgReach / 1000).toFixed(1)}K` : contentType.avgReach}
-                        </span>
-                      </div>
-                      <div className="text-xs text-gray-600">Avg Reach</div>
-                    </div>
-                    
-                    <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                      <div className="flex items-center justify-center space-x-1 mb-1">
-                        <Share className="w-4 h-4 text-purple-500" />
-                        <span className="text-sm font-semibold text-gray-900">{contentType.avgShares}</span>
-                      </div>
-                      <div className="text-xs text-gray-600">Avg Shares</div>
-                    </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-
-            {/* Content Strategy Recommendations */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                <span className="mr-2">💡</span>
-                Key Insights
-              </h3>
-              
-              <div className="space-y-3">
-                {contentTypes.length > 0 && (
-                  <div className="p-3 bg-green-50 rounded-lg border border-green-200">
-                    <div className="flex items-center space-x-2 mb-2">
-                      <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-xs font-bold">🏆</span>
-                      </div>
-                      <span className="font-medium text-green-800">Top Performer</span>
-                    </div>
-                    <p className="text-sm text-green-700">
-                      <strong>{contentTypes[0].type}s</strong> are your best content format with {contentTypes[0].engagementRate} engagement rate and {contentTypes[0].avgLikes} average likes.
-                    </p>
-                  </div>
-                )}
-
-                {contentTypes.length > 1 && (
-                  <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
-                    <div className="flex items-center space-x-2 mb-2">
-                      <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-xs">📈</span>
-                      </div>
-                      <span className="font-medium text-blue-800">Growth Opportunity</span>
-                    </div>
-                    <p className="text-sm text-blue-700">
-                      Consider creating more <strong>{contentTypes[0].type}s</strong> - they get {Math.round(((contentTypes[0].avgLikes - contentTypes[contentTypes.length - 1].avgLikes) / contentTypes[contentTypes.length - 1].avgLikes) * 100)}% more likes than your lowest performing format.
-                    </p>
-                  </div>
-                )}
-
-                <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <div className="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center">
-                      <span className="text-white text-xs">🎯</span>
-                    </div>
-                    <span className="font-medium text-purple-800">Content Mix</span>
-                  </div>
-                  <p className="text-sm text-purple-700">
-                    You've posted {instagramData?.recentPosts?.length || contentTypes.reduce((sum, type) => sum + type.count, 0)} pieces of content. Focus on your top-performing formats for maximum engagement.
-                  </p>
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-teal-600 text-2xl">📊</span>
                 </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">No Content Data Yet</h3>
+                <p className="text-gray-600 text-sm mb-4">
+                  Connect your Instagram account and post different types of content to see performance analysis.
+                </p>
+                <p className="text-teal-700 text-sm">
+                  We'll analyze Reels, Carousels, and Posts once you have data.
+                </p>
               </div>
-            </div>
-
-            {/* AI Insights */}
-            <div className="bg-teal-50 rounded-2xl p-4">
-              <h3 className="font-semibold text-teal-900 mb-2">🤖 AI Recommendations</h3>
-              <div className="space-y-2 text-sm">
-                {contentTypes.length > 0 && (
-                  <>
-                    <p className="text-teal-800">
-                      • <strong>{contentTypes[0].type}s</strong> are your strongest content format - create more of these
-                    </p>
-                    <p className="text-teal-800">
-                      • Your {contentTypes[0].type.toLowerCase()}s average <strong>{contentTypes[0].avgLikes} likes</strong> and <strong>{contentTypes[0].avgComments} comments</strong>
-                    </p>
-                    {contentTypes.length > 1 && (
-                      <p className="text-teal-800">
-                        • Consider experimenting with different approaches for <strong>{contentTypes[contentTypes.length - 1].type}s</strong> to improve their {contentTypes[contentTypes.length - 1].engagementRate} engagement rate
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
+            )}
           </div>
         </div>
       );
@@ -1141,9 +1042,9 @@ const SocialSageMobile = () => {
                   </div>
                 </div>
 
-                {/* AI Recommendations */}
+                {/* Recommendations */}
                 <div className="mt-6 bg-purple-50 rounded-2xl p-4">
-                  <h3 className="font-semibold text-purple-900 mb-2">💡 AI Recommendations</h3>
+                  <h3 className="font-semibold text-purple-900 mb-2">💡 Recommendations</h3>
                   <div className="space-y-2 text-sm">
                     <p className="text-purple-800">
                       • Your best time slot is <strong>{timeSlots[0]?.time}</strong> with {timeSlots[0]?.avgLikes} average likes
@@ -1222,33 +1123,7 @@ const SocialSageMobile = () => {
                   </div>
                 </div>
 
-                {/* Consistency Score */}
-                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-4">
-                  <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
-                    <span className="mr-2">🎯</span>
-                    Consistency Score
-                  </h3>
-                  
-                  <div className="flex items-center space-x-3 mb-2">
-                    <div className="flex-1 bg-gray-200 rounded-full h-4 overflow-hidden">
-                      <div 
-                        className={`h-4 rounded-full transition-all duration-700 ${
-                          frequencyData.consistencyScore >= 80 ? 'bg-gradient-to-r from-green-400 to-emerald-500' :
-                          frequencyData.consistencyScore >= 60 ? 'bg-gradient-to-r from-yellow-400 to-orange-500' :
-                          'bg-gradient-to-r from-red-400 to-red-500'
-                        }`}
-                        style={{ width: `${frequencyData.consistencyScore}%` }}
-                      ></div>
-                    </div>
-                    <div className="text-lg font-bold text-gray-900">{frequencyData.consistencyScore}%</div>
-                  </div>
-                  
-                  <p className="text-sm text-gray-600">
-                    {frequencyData.consistencyScore >= 80 ? 'Excellent! You post very consistently.' :
-                     frequencyData.consistencyScore >= 60 ? 'Good consistency, but room for improvement.' :
-                     'Try to post more regularly for better engagement.'}
-                  </p>
-                </div>
+
 
                 {/* Performance by Frequency */}
                 <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-4">
@@ -1314,26 +1189,7 @@ const SocialSageMobile = () => {
                   </div>
                 )}
 
-                {/* AI Recommendations */}
-                <div className="mt-6 bg-orange-50 rounded-2xl p-4">
-                  <h3 className="font-semibold text-orange-900 mb-2">💡 AI Recommendations</h3>
-                  <div className="space-y-2 text-sm">
-                    <p className="text-orange-800">
-                      • Your optimal posting frequency is <strong>{frequencyData.optimalFrequency} posts per week</strong>
-                    </p>
-                    <p className="text-orange-800">
-                      • Best performing frequency range: <strong>{frequencyData.performanceByFrequency[0]?.range}</strong>
-                    </p>
-                    <p className="text-orange-800">
-                      • Consistency score: {frequencyData.consistencyScore}% - {frequencyData.consistencyScore >= 70 ? 'keep it up!' : 'try posting more regularly'}
-                    </p>
-                    {frequencyData.currentFrequency < frequencyData.optimalFrequency && (
-                      <p className="text-orange-800">
-                        • Consider increasing to {frequencyData.optimalFrequency} posts/week for better engagement
-                      </p>
-                    )}
-                  </div>
-                </div>
+
               </>
             ) : (
               <div className="text-center py-8">
@@ -1506,6 +1362,104 @@ const SocialSageMobile = () => {
 
     // Enhanced metric detail view for Growth and Engagement categories
     if (category.id === 'growth') {
+      const [growthTimeFrame, setGrowthTimeFrame] = useState<'weekly' | 'monthly'>('weekly');
+      
+      // Get the appropriate growth data based on selected timeframe
+      const getCurrentGrowthData = () => {
+        if (growthTimeFrame === 'weekly') {
+          return {
+            rate: instagramData?.growthData?.canCalculateWeekly ? instagramData.growthRate : null,
+            canCalculate: instagramData?.growthData?.canCalculateWeekly || false,
+            daysUntil: instagramData?.growthData?.daysUntilWeekly || 7,
+            label: 'Weekly Growth',
+            period: 'past 7 days'
+          };
+        } else {
+          return {
+            rate: instagramData?.growthData?.canCalculateMonthly ? instagramData.monthlyGrowth : null,
+            canCalculate: instagramData?.growthData?.canCalculateMonthly || false,
+            daysUntil: instagramData?.growthData?.daysUntilMonthly || 30,
+            label: 'Monthly Growth',
+            period: 'past 30 days'
+          };
+        }
+      };
+
+      const growthData = getCurrentGrowthData();
+
+      // Calculate absolute follower change
+      const getAbsoluteFollowerChange = () => {
+        if (!instagramData?.followers) return null;
+        
+        if (growthTimeFrame === 'weekly' && instagramData?.growthData?.canCalculateWeekly && instagramData.growthRate) {
+          const growthPercent = parseFloat(instagramData.growthRate.replace('+', '').replace('%', ''));
+          const absoluteChange = Math.round((growthPercent / 100) * instagramData.followers);
+          return {
+            change: absoluteChange,
+            isPositive: absoluteChange >= 0,
+            formatted: absoluteChange >= 0 ? `+${absoluteChange.toLocaleString()}` : absoluteChange.toLocaleString()
+          };
+        } else if (growthTimeFrame === 'monthly' && instagramData?.growthData?.canCalculateMonthly && instagramData.monthlyGrowth) {
+          const growthPercent = parseFloat(instagramData.monthlyGrowth.replace('+', '').replace('%', ''));
+          const absoluteChange = Math.round((growthPercent / 100) * instagramData.followers);
+          return {
+            change: absoluteChange,
+            isPositive: absoluteChange >= 0,
+            formatted: absoluteChange >= 0 ? `+${absoluteChange.toLocaleString()}` : absoluteChange.toLocaleString()
+          };
+        }
+        
+        return null;
+      };
+
+      const absoluteChange = getAbsoluteFollowerChange();
+
+      // Generate chart data from real historical data when available
+      const generateChartData = () => {
+        if (!instagramData?.followers) return [];
+        
+        // Use real historical data if available
+        if (instagramData.historicalData) {
+          if (growthTimeFrame === 'weekly' && instagramData.historicalData.weekly.length > 0) {
+            return instagramData.historicalData.weekly.map((dataPoint, index) => {
+              const date = new Date(dataPoint.date);
+              const weekStart = new Date(date);
+              weekStart.setDate(date.getDate() - 6); // Start of the week (Monday)
+              
+              const isCurrentWeek = !dataPoint.isComplete;
+              const weekLabel = isCurrentWeek ? 'This Week' : 
+                `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
+              
+              return {
+                label: weekLabel,
+                followers: dataPoint.followers,
+                isCurrentPeriod: isCurrentWeek,
+                date: dataPoint.date
+              };
+            });
+          } else if (growthTimeFrame === 'monthly' && instagramData.historicalData.monthly.length > 0) {
+            return instagramData.historicalData.monthly.map((dataPoint, index) => {
+              const date = new Date(dataPoint.date);
+              const isCurrentMonth = !dataPoint.isComplete;
+              const monthLabel = date.toLocaleDateString('en-US', { month: 'short' });
+              
+              return {
+                label: monthLabel,
+                followers: dataPoint.followers,
+                isCurrentPeriod: isCurrentMonth,
+                date: dataPoint.date
+              };
+            });
+          }
+        }
+        
+        // Only return empty array if no real data available - no fake/estimated data
+        return [];
+      };
+
+      const chartData = generateChartData();
+      const maxFollowers = Math.max(...chartData.map(d => d.followers));
+
       return (
         <div className="flex-1 overflow-y-auto bg-gradient-to-b from-emerald-50 to-teal-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-emerald-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
@@ -1523,130 +1477,209 @@ const SocialSageMobile = () => {
 
           <div className="p-4">
             <div className="bg-gradient-to-br from-emerald-100 to-teal-100 border-emerald-200 rounded-2xl p-4 mb-6 shadow-sm border">
-              <h2 className="text-lg font-bold text-gray-900 mb-2">Your Growth Journey</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-2">Follower Growth Analysis</h2>
               <p className="text-emerald-800 text-sm">
-                Track your follower growth and profile performance across all metrics.
+                {instagramData?.growthData?.daysOfData ? 
+                  `${instagramData.growthData.daysOfData} days of data collected since ${instagramData.growthData.dataAvailableSince}` :
+                  'Connect your account and wait for data collection to see growth rates.'
+                }
               </p>
             </div>
 
-            {/* Main Growth Stats Cards */}
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm text-center">
-                <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <Users className="w-6 h-6 text-white" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900 mb-1">
-                  {instagramData?.followers?.toLocaleString() || '12.4K'}
-                </div>
-                <div className="text-sm text-gray-600 mb-2">Total Followers</div>
-                <div className="flex items-center justify-center space-x-1">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-xs text-green-600 font-medium">
-                    {instagramData?.growthRate || '+8.2%'} growth
-                  </span>
-                </div>
-              </div>
-
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm text-center">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                  <TrendingUp className="w-6 h-6 text-white" />
-                </div>
-                <div className="text-2xl font-bold text-gray-900 mb-1">
-                  {instagramData?.accountInsights?.profile_visits?.toLocaleString() || '1.2K'}
-                </div>
-                <div className="text-sm text-gray-600 mb-2">Profile Visits</div>
-                <div className="flex items-center justify-center space-x-1">
-                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <span className="text-xs text-blue-600 font-medium">Last 30 days</span>
-                </div>
+            {/* Weekly/Monthly Toggle */}
+            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+              <div className="flex bg-emerald-50 rounded-xl p-1 border border-emerald-200">
+                {[
+                  { key: 'weekly' as const, label: 'Weekly' },
+                  { key: 'monthly' as const, label: 'Monthly' }
+                ].map((period) => (
+                  <button
+                    key={period.key}
+                    onClick={() => setGrowthTimeFrame(period.key)}
+                    className={`flex-1 py-2 px-4 text-sm font-medium rounded-lg transition-all ${
+                      growthTimeFrame === period.key
+                        ? 'bg-white text-emerald-700 shadow-sm border border-emerald-300'
+                        : 'text-emerald-600 hover:text-emerald-700'
+                    }`}
+                  >
+                    {period.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* Reach & Impressions Visual */}
+            {/* Growth Rate Display */}
             <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
               <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
                 <span className="mr-2">📈</span>
-                Reach & Impressions
+                {growthData.label}
               </h3>
               
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-700">Reach</span>
-                    <span className="text-lg font-bold text-emerald-600">
-                      {instagramData?.accountInsights?.reach ? `${(instagramData.accountInsights.reach / 1000).toFixed(1)}K` : '15.3K'}
-                    </span>
+              {growthData.canCalculate ? (
+                <>
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="text-center">
+                      <div className="text-3xl font-bold text-emerald-600 mb-1">
+                        {growthData.rate}
+                      </div>
+                      <div className="text-sm text-gray-600">Growth Rate</div>
+                    </div>
+                    <div className="text-center">
+                      <div className={`text-3xl font-bold mb-1 ${absoluteChange?.isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {absoluteChange?.formatted || '--'}
+                      </div>
+                      <div className="text-sm text-gray-600">Followers {growthTimeFrame === 'weekly' ? 'This Week' : 'This Month'}</div>
+                    </div>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div className="bg-gradient-to-r from-emerald-400 to-teal-500 h-3 rounded-full transition-all duration-700" style={{width: '75%'}}></div>
+                  
+                  <div className="text-center text-sm text-gray-600">
+                    Growth over {growthData.period}
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">75% of your follower base reached</div>
+                </>
+              ) : (
+                <div className="text-center py-6">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-gray-400 text-2xl">📊</span>
+                  </div>
+                  <h4 className="text-lg font-semibold text-gray-900 mb-2">Not Enough Data Yet</h4>
+                  <p className="text-gray-600 text-sm mb-4">
+                    We need {growthTimeFrame === 'weekly' ? '7' : '30'} days of data to calculate accurate {growthTimeFrame} growth rates.
+                  </p>
+                  <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                    <div className="text-sm font-medium text-blue-900">
+                      {growthData.label} available in {growthData.daysUntil} days
+                    </div>
+                    <div className="text-xs text-blue-700 mt-1">
+                      We're currently collecting data - check back soon!
+                    </div>
+                  </div>
                 </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-700">Impressions</span>
-                    <span className="text-lg font-bold text-blue-600">
-                      {instagramData?.accountInsights?.impressions ? `${(instagramData.accountInsights.impressions / 1000).toFixed(1)}K` : '45.7K'}
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div className="bg-gradient-to-r from-blue-400 to-indigo-500 h-3 rounded-full transition-all duration-700" style={{width: '85%'}}></div>
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">3.6x reach through multiple views</div>
-                </div>
-              </div>
+              )}
             </div>
 
-            {/* Growth Rate Visualization */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                <span className="mr-2">🎯</span>
-                Growth Rate Breakdown
-              </h3>
-              
-              <div className="text-center mb-4">
-                <div className="text-3xl font-bold text-emerald-600 mb-1">
-                  {instagramData?.growthRate || '+8.2%'}
-                </div>
-                <div className="text-sm text-gray-600">Weekly Growth Rate</div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center">
-                      <span className="text-white text-xs font-bold">✓</span>
+            {/* Real Profile Performance (only show if we have real data) */}
+            {instagramData?.accountInsights && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">👁️</span>
+                  Profile Performance ({growthTimeFrame === 'weekly' ? 'Last 7 Days' : 'Last 30 Days'})
+                </h3>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  {instagramData.accountInsights.profile_visits > 0 && (
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-blue-600 mb-1">
+                        {/* Show scaled data based on timeframe */}
+                        {growthTimeFrame === 'weekly' ? 
+                          Math.round(instagramData.accountInsights.profile_visits * (7/30)).toLocaleString() :
+                          instagramData.accountInsights.profile_visits.toLocaleString()
+                        }
+                      </div>
+                      <div className="text-sm text-gray-600">Profile Visits</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {growthTimeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                      </div>
                     </div>
-                    <span className="text-sm font-medium text-gray-900">Above Industry Average</span>
-                  </div>
-                  <span className="text-sm font-bold text-emerald-600">+5.7%</span>
-                </div>
-
-                <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                      <span className="text-white text-xs font-bold">↗</span>
+                  )}
+                  
+                  {instagramData.accountInsights.reach > 0 && (
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-emerald-600 mb-1">
+                        {/* Show scaled data based on timeframe */}
+                        {growthTimeFrame === 'weekly' ? 
+                          ((instagramData.accountInsights.reach * (7/30)) / 1000).toFixed(1) + 'K' :
+                          (instagramData.accountInsights.reach / 1000).toFixed(1) + 'K'
+                        }
+                      </div>
+                      <div className="text-sm text-gray-600">Total Reach</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {growthTimeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                      </div>
                     </div>
-                    <span className="text-sm font-medium text-gray-900">Consistent Growth</span>
-                  </div>
-                  <span className="text-sm font-bold text-blue-600">4 weeks</span>
+                  )}
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* AI Insights */}
+            {/* Follower History Bar Chart - Vertical Bars */}
+            {chartData.length > 0 && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">📊</span>
+                  Follower History ({growthTimeFrame === 'weekly' ? 'Last 4 Weeks' : 'Last 6 Months'})
+                </h3>
+                
+                {/* Vertical Bar Chart */}
+                <div className="relative">
+                  {/* Y-axis labels (follower counts) */}
+                  <div className="flex items-end justify-between h-40 mb-3">
+                    {chartData.map((dataPoint, index) => {
+                      const height = maxFollowers > 0 ? (dataPoint.followers / maxFollowers) * 100 : 0;
+                      return (
+                        <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/chartData.length}%` }}>
+                          {/* Follower count label */}
+                          <div className="text-xs font-bold text-gray-900 mb-1">
+                            {dataPoint.followers >= 1000 ? 
+                              `${(dataPoint.followers / 1000).toFixed(1)}K` : 
+                              dataPoint.followers.toLocaleString()
+                            }
+                          </div>
+                          
+                          {/* Vertical bar */}
+                          <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
+                            <div 
+                              className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
+                                dataPoint.isCurrentPeriod 
+                                  ? 'bg-gradient-to-t from-emerald-400 to-emerald-600' 
+                                  : 'bg-gradient-to-t from-emerald-300 to-emerald-500'
+                              }`}
+                              style={{ height: `${Math.max(height, 8)}%` }}
+                            />
+                            {dataPoint.isCurrentPeriod && (
+                              <div className="absolute bottom-0 w-full bg-gradient-to-t from-emerald-400 to-emerald-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* X-axis labels (time periods) */}
+                  <div className="flex justify-between border-t border-gray-200 pt-2">
+                    {chartData.map((dataPoint, index) => (
+                      <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/chartData.length}%` }}>
+                        {dataPoint.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="mt-4 text-xs text-gray-500 text-center">
+                  {growthTimeFrame === 'weekly' ? 
+                    'Current week updates daily until Sunday' : 
+                    'Current month updates daily until month end'
+                  }
+                </div>
+              </div>
+            )}
+
+            {/* Data Collection Status */}
             <div className="bg-emerald-50 rounded-2xl p-4">
-              <h3 className="font-semibold text-emerald-900 mb-2">💡 Growth Insights</h3>
+              <h3 className="font-semibold text-emerald-900 mb-2">📊 Data Collection Status</h3>
               <div className="space-y-2 text-sm">
                 <p className="text-emerald-800">
-                  • Your growth rate is <strong>{instagramData?.growthRate || '8.2%'}</strong> above industry average
+                  • <strong>{instagramData?.growthData?.daysOfData || 0} days</strong> of follower data collected
+                </p>
+                {instagramData?.growthData?.dataAvailableSince && (
+                  <p className="text-emerald-800">
+                    • Tracking started: <strong>{instagramData.growthData.dataAvailableSince}</strong>
+                  </p>
+                )}
+                <p className="text-emerald-800">
+                  • Weekly growth rates: <strong>{instagramData?.growthData?.canCalculateWeekly ? 'Available' : `Available in ${instagramData?.growthData?.daysUntilWeekly || 7} days`}</strong>
                 </p>
                 <p className="text-emerald-800">
-                  • Profile visits increased <strong>24%</strong> this month - your bio optimization is working
-                </p>
-                <p className="text-emerald-800">
-                  • Reach is <strong>75%</strong> of your follower count - excellent visibility
+                  • Monthly growth rates: <strong>{instagramData?.growthData?.canCalculateMonthly ? 'Available' : `Available in ${instagramData?.growthData?.daysUntilMonthly || 30} days`}</strong>
                 </p>
               </div>
             </div>
@@ -1656,6 +1689,123 @@ const SocialSageMobile = () => {
     }
 
     if (category.id === 'engagement') {
+      // Calculate 30-day engagement metrics from real data
+      const calculateEngagementMetrics = () => {
+        if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
+          return {
+            engagementRate: instagramData?.engagementRate || '--',
+            avgLikes: instagramData?.avgLikes || 0,
+            avgComments: instagramData?.avgComments || 0,
+            avgReach: instagramData?.avgReach || 0,
+            avgShares: 0
+          };
+        }
+
+        const now = new Date();
+        const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+
+        // Filter posts from last 30 days
+        const last30DaysPosts = instagramData.recentPosts.filter(post => {
+          const postDate = new Date(post.timestamp);
+          return postDate >= thirtyDaysAgo;
+        });
+
+        if (last30DaysPosts.length === 0) {
+          return {
+            engagementRate: '--',
+            avgLikes: 0,
+            avgComments: 0,
+            avgReach: 0,
+            avgShares: 0
+          };
+        }
+
+        // Calculate metrics from last 30 days
+        const totalLikes = last30DaysPosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
+        const totalComments = last30DaysPosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
+        const totalReach = last30DaysPosts.reduce((sum, post) => sum + (post.reach || 0), 0);
+        const totalShares = last30DaysPosts.reduce((sum, post) => sum + (post.website_clicks || 0), 0);
+        const totalEngagement = totalLikes + totalComments;
+
+        const avgLikes = Math.round(totalLikes / last30DaysPosts.length);
+        const avgComments = Math.round(totalComments / last30DaysPosts.length);
+        const avgReach = totalReach > 0 ? Math.round(totalReach / last30DaysPosts.length) : 0;
+        const avgShares = Math.round(totalShares / last30DaysPosts.length);
+
+        // Calculate engagement rate
+        let engagementRate = '--';
+        if (totalReach > 0) {
+          const rate = (totalEngagement / totalReach) * 100;
+          engagementRate = `${rate.toFixed(1)}%`;
+        } else if (instagramData.followers > 0) {
+          const avgFollowersReached = instagramData.followers * last30DaysPosts.length;
+          const rate = (totalEngagement / avgFollowersReached) * 100;
+          engagementRate = `${rate.toFixed(1)}%`;
+        }
+
+        return {
+          engagementRate,
+          avgLikes,
+          avgComments,
+          avgReach,
+          avgShares
+        };
+      };
+
+      const engagementMetrics = calculateEngagementMetrics();
+
+      // Generate engagement rate history for last 6 months
+      const generateEngagementHistory = () => {
+        if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
+          return [];
+        }
+
+        const months = [];
+        const today = new Date();
+        
+        for (let i = 5; i >= 0; i--) {
+          const monthStart = new Date(today.getFullYear(), today.getMonth() - i, 1);
+          const monthEnd = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
+          const isCurrentMonth = i === 0;
+          
+          // Filter posts for this month
+          const monthPosts = instagramData.recentPosts.filter(post => {
+            const postDate = new Date(post.timestamp);
+            return postDate >= monthStart && postDate <= monthEnd;
+          });
+
+          let monthlyEngagementRate = 0;
+          if (monthPosts.length > 0) {
+            const totalLikes = monthPosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
+            const totalComments = monthPosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
+            const totalReach = monthPosts.reduce((sum, post) => sum + (post.reach || 0), 0);
+            const totalEngagement = totalLikes + totalComments;
+
+            if (totalReach > 0) {
+              monthlyEngagementRate = (totalEngagement / totalReach) * 100;
+            } else if (instagramData.followers > 0) {
+              const avgFollowersReached = instagramData.followers * monthPosts.length;
+              monthlyEngagementRate = (totalEngagement / avgFollowersReached) * 100;
+            }
+          }
+
+          const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'short' });
+          
+          months.push({
+            label: monthLabel,
+            engagementRate: monthlyEngagementRate,
+            isCurrentPeriod: isCurrentMonth,
+            date: monthStart.toISOString(),
+            postsCount: monthPosts.length
+          });
+        }
+        
+        return months;
+      };
+
+      const engagementHistory = generateEngagementHistory();
+      const maxEngagementRate = Math.max(...engagementHistory.map(d => d.engagementRate));
+
       return (
         <div className="flex-1 overflow-y-auto bg-gradient-to-b from-blue-50 to-purple-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-blue-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
@@ -1673,9 +1823,9 @@ const SocialSageMobile = () => {
 
           <div className="p-4">
             <div className="bg-gradient-to-br from-blue-100 to-purple-100 border-blue-200 rounded-2xl p-4 mb-6 shadow-sm border">
-              <h2 className="text-lg font-bold text-gray-900 mb-2">Audience Interaction</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-2">Audience Interaction (Last 30 Days)</h2>
               <p className="text-blue-800 text-sm">
-                Measure how actively your audience engages with your content.
+                Measure how actively your audience engages with your content over the past month.
               </p>
             </div>
 
@@ -1692,25 +1842,24 @@ const SocialSageMobile = () => {
                   className="absolute inset-0 rounded-full border-8 border-blue-500 transition-all duration-1000"
                   style={{
                     clipPath: `polygon(50% 50%, 50% 0%, ${
-                      50 + 50 * Math.cos((parseFloat(instagramData?.engagementRate?.replace('%', '') || '4.2') / 10) * 2 * Math.PI - Math.PI/2)
+                      50 + 50 * Math.cos((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
                     }% ${
-                      50 - 50 * Math.sin((parseFloat(instagramData?.engagementRate?.replace('%', '') || '4.2') / 10) * 2 * Math.PI - Math.PI/2)
+                      50 - 50 * Math.sin((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
                     }%, 50% 50%)`
                   }}
                 ></div>
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div>
                     <div className="text-2xl font-bold text-blue-600">
-                      {instagramData?.engagementRate || '4.2%'}
+                      {engagementMetrics.engagementRate}
                     </div>
                     <div className="text-xs text-gray-600">Engagement</div>
                   </div>
                 </div>
               </div>
               
-              <div className="flex items-center justify-center space-x-1 mb-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                <span className="text-sm text-green-600 font-medium">Above average (3.5%)</span>
+              <div className="text-sm text-gray-600">
+                Based on posts from the last 30 days
               </div>
             </div>
 
@@ -1718,7 +1867,7 @@ const SocialSageMobile = () => {
             <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
               <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
                 <span className="mr-2">📊</span>
-                Engagement Breakdown
+                Engagement Breakdown (Last 30 Days)
               </h3>
               
               <div className="space-y-4">
@@ -1729,7 +1878,7 @@ const SocialSageMobile = () => {
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-bold text-gray-900">
-                      {instagramData?.avgLikes?.toString() || '342'}
+                      {engagementMetrics.avgLikes.toLocaleString()}
                     </div>
                     <div className="w-16 bg-gray-200 rounded-full h-2">
                       <div className="bg-gradient-to-r from-red-400 to-pink-500 h-2 rounded-full" style={{width: '80%'}}></div>
@@ -1744,7 +1893,7 @@ const SocialSageMobile = () => {
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-bold text-gray-900">
-                      {instagramData?.avgComments?.toString() || '18.5'}
+                      {engagementMetrics.avgComments.toLocaleString()}
                     </div>
                     <div className="w-16 bg-gray-200 rounded-full h-2">
                       <div className="bg-gradient-to-r from-blue-400 to-blue-600 h-2 rounded-full" style={{width: '65%'}}></div>
@@ -1754,75 +1903,97 @@ const SocialSageMobile = () => {
 
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
-                    <Share className="w-5 h-5 text-green-500" />
+                    <TrendingUp className="w-5 h-5 text-green-500" />
                     <span className="text-sm font-medium text-gray-700">Avg Reach per Post</span>
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-bold text-gray-900">
-                      {instagramData?.avgReach ? instagramData.avgReach.toLocaleString() : '1.2K'}
+                      {engagementMetrics.avgReach > 0 ? engagementMetrics.avgReach.toLocaleString() : '--'}
                     </div>
                     <div className="w-16 bg-gray-200 rounded-full h-2">
                       <div className="bg-gradient-to-r from-green-400 to-emerald-500 h-2 rounded-full" style={{width: '70%'}}></div>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Engagement Quality Score */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                <span className="mr-2">⭐</span>
-                Engagement Quality
-              </h3>
-              
-              <div className="grid grid-cols-3 gap-3">
-                <div className="text-center p-3 bg-green-50 rounded-lg">
-                  <div className="text-xl font-bold text-green-600">8.7</div>
-                  <div className="text-xs text-gray-600">Like Quality</div>
-                </div>
-                <div className="text-center p-3 bg-blue-50 rounded-lg">
-                  <div className="text-xl font-bold text-blue-600">9.2</div>
-                  <div className="text-xs text-gray-600">Comment Quality</div>
-                </div>
-                <div className="text-center p-3 bg-purple-50 rounded-lg">
-                  <div className="text-xl font-bold text-purple-600">7.8</div>
-                  <div className="text-xs text-gray-600">Share Rate</div>
-                </div>
-              </div>
-              
-              <div className="mt-4 p-3 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg">
-                <div className="text-sm font-medium text-gray-900 mb-1">Overall Quality Score</div>
-                <div className="flex items-center space-x-3">
-                  <div className="flex-1 bg-gray-200 rounded-full h-3">
-                    <div className="bg-gradient-to-r from-blue-500 to-purple-600 h-3 rounded-full" style={{width: '85%'}}></div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <Share className="w-5 h-5 text-purple-500" />
+                    <span className="text-sm font-medium text-gray-700">Avg Shares per Post</span>
                   </div>
-                  <span className="text-lg font-bold text-purple-600">8.5/10</span>
+                  <div className="text-right">
+                    <div className="text-lg font-bold text-gray-900">
+                      {engagementMetrics.avgShares.toLocaleString()}
+                    </div>
+                    <div className="w-16 bg-gray-200 rounded-full h-2">
+                      <div className="bg-gradient-to-r from-purple-400 to-purple-600 h-2 rounded-full" style={{width: '55%'}}></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* AI Insights */}
-            <div className="bg-blue-50 rounded-2xl p-4">
-              <h3 className="font-semibold text-blue-900 mb-2">💡 Engagement Insights</h3>
-              <div className="space-y-2 text-sm">
-                <p className="text-blue-800">
-                  • Your engagement rate <strong>{instagramData?.engagementRate || '4.2%'}</strong> is above industry average
-                </p>
-                <p className="text-blue-800">
-                  • Comments drive higher quality engagement - ask more questions in captions
-                </p>
-                <p className="text-blue-800">
-                  • Your reach per post averages <strong>{instagramData?.avgReach?.toLocaleString() || '1,200'}</strong> people
-                </p>
+            {/* Engagement Rate History Bar Chart */}
+            {engagementHistory.length > 0 && (
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">📈</span>
+                  Engagement Rate History (Last 6 Months)
+                </h3>
+                
+                {/* Vertical Bar Chart */}
+                <div className="relative">
+                  {/* Y-axis labels (engagement rates) */}
+                  <div className="flex items-end justify-between h-40 mb-3">
+                    {engagementHistory.map((dataPoint, index) => {
+                      const height = maxEngagementRate > 0 ? (dataPoint.engagementRate / maxEngagementRate) * 100 : 0;
+                      return (
+                        <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/engagementHistory.length}%` }}>
+                          {/* Engagement rate label */}
+                          <div className="text-xs font-bold text-gray-900 mb-1">
+                            {dataPoint.engagementRate > 0 ? `${dataPoint.engagementRate.toFixed(1)}%` : '--'}
+                          </div>
+                          
+                          {/* Vertical bar */}
+                          <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
+                            <div 
+                              className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
+                                dataPoint.isCurrentPeriod 
+                                  ? 'bg-gradient-to-t from-blue-400 to-blue-600' 
+                                  : 'bg-gradient-to-t from-blue-300 to-blue-500'
+                              }`}
+                              style={{ height: `${Math.max(height, 8)}%` }}
+                            />
+                            {dataPoint.isCurrentPeriod && (
+                              <div className="absolute bottom-0 w-full bg-gradient-to-t from-blue-400 to-blue-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* X-axis labels (months) */}
+                  <div className="flex justify-between border-t border-gray-200 pt-2">
+                    {engagementHistory.map((dataPoint, index) => (
+                      <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/engagementHistory.length}%` }}>
+                        {dataPoint.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                <div className="mt-4 text-xs text-gray-500 text-center">
+                  Current month updates daily until month end
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       );
     }
 
-    // Regular metric detail view for other categories
+    // Default generic metric detail view for other categories
     return (
       <div className="flex-1 overflow-y-auto bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center sticky top-0 z-10">
@@ -1874,11 +2045,12 @@ const SocialSageMobile = () => {
           </div>
 
           <div className="bg-blue-50 rounded-lg p-4">
-            <h3 className="font-semibold text-blue-900 mb-2">💡 AI Insights</h3>
+            <h3 className="font-semibold text-blue-900 mb-2">💡 Key Insights</h3>
             <p className="text-blue-800 text-sm">
-              {category.id === 'growth' && `Your follower growth is ${instagramData ? 'performing well' : 'accelerating'}! ${instagramData ? `You have ${instagramData.followers.toLocaleString()} followers with ${instagramData?.accountInsights?.profile_visits?.toLocaleString() || 'N/A'} profile visits in the last 30 days.` : 'Profile visits increased 24% after implementing story highlights.'}`}
-              {category.id === 'engagement' && `Your engagement rate is ${instagramData?.engagementRate || '4.2%'}. ${instagramData?.avgReach ? `Your posts reach an average of ${instagramData.avgReach.toLocaleString()} people.` : 'Comments are driving higher engagement rates.'} Consider asking more questions in your captions.`}
-              {category.id === 'content' && "Tutorial Reels are your top performer with 89% higher engagement. Carousels work great for educational content, while behind-the-scenes posts build authentic connections."}
+              {category.id === 'growth' && instagramData && `You have ${instagramData.followers.toLocaleString()} followers${instagramData?.accountInsights?.profile_visits ? ` with ${instagramData.accountInsights.profile_visits.toLocaleString()} profile visits in the last 30 days.` : '.'}`}
+              {category.id === 'engagement' && instagramData && `Your engagement rate is ${instagramData.engagementRate}.${instagramData?.avgReach ? ` Your posts reach an average of ${instagramData.avgReach.toLocaleString()} people.` : ''} Consider asking more questions in your captions to boost engagement.`}
+              {category.id === 'content' && instagramData?.recentPosts && instagramData.recentPosts.length > 0 && `You have ${instagramData.recentPosts.length} posts to analyze. Different content types perform differently with your audience.`}
+              {!instagramData && 'Connect your Instagram account to see personalized insights and recommendations.'}
             </p>
           </div>
         </div>
@@ -1886,60 +2058,95 @@ const SocialSageMobile = () => {
     );
   };
 
-  // Data for different time periods using real data
+  // Data for different time periods using real data only
   const getMetrics = (period: TimeFrame): Metrics => {
     if (instagramData) {
-      const estimatedWeeklyReach = (instagramData.totalReach && instagramData.totalReach > 0) ? 
-        instagramData.totalReach.toLocaleString() :
-        Math.round(instagramData.followers * 0.15).toLocaleString();
-        
-      const estimatedMonthlyReach = (instagramData.totalReach && instagramData.totalReach > 0) ?
-        (instagramData.totalReach * 4.33).toLocaleString() :
-        Math.round(instagramData.followers * 2.8).toLocaleString();
-        
+      // Calculate timeframe-specific metrics from recent posts
+      const getTimeframeSpecificMetrics = () => {
+        if (!instagramData.recentPosts || instagramData.recentPosts.length === 0) {
+          return {
+            engagementRate: instagramData.engagementRate || '--',
+            avgReach: instagramData.avgReach && instagramData.avgReach > 0 ? 
+              (instagramData.avgReach >= 1000 ? `${(instagramData.avgReach / 1000).toFixed(1)}K` : instagramData.avgReach.toString()) : 
+              '--'
+          };
+        }
+
+        const now = new Date();
+        const daysBack = period === 'weekly' ? 7 : 30;
+        const cutoffDate = new Date(now.getTime() - (daysBack * 24 * 60 * 60 * 1000));
+
+        // Filter posts within the timeframe
+        const timeframePosts = instagramData.recentPosts.filter(post => {
+          const postDate = new Date(post.timestamp);
+          return postDate >= cutoffDate;
+        });
+
+        if (timeframePosts.length === 0) {
+          return {
+            engagementRate: '--',
+            avgReach: '--'
+          };
+        }
+
+        // Calculate engagement rate for timeframe
+        const totalLikes = timeframePosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
+        const totalComments = timeframePosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
+        const totalReach = timeframePosts.reduce((sum, post) => sum + (post.reach || 0), 0);
+        const totalEngagement = totalLikes + totalComments;
+
+        let timeframeEngagementRate = '--';
+        if (totalReach > 0) {
+          // Calculate based on actual reach
+          const rate = (totalEngagement / totalReach) * 100;
+          timeframeEngagementRate = `${rate.toFixed(1)}%`;
+        } else if (instagramData.followers > 0) {
+          // Fallback to follower-based calculation
+          const avgFollowersReached = instagramData.followers * timeframePosts.length;
+          const rate = (totalEngagement / avgFollowersReached) * 100;
+          timeframeEngagementRate = `${rate.toFixed(1)}%`;
+        }
+
+        // Calculate avg reach for timeframe
+        let timeframeAvgReach = '--';
+        if (totalReach > 0) {
+          const avgReach = Math.round(totalReach / timeframePosts.length);
+          timeframeAvgReach = avgReach >= 1000 ? 
+            `${(avgReach / 1000).toFixed(1)}K` : 
+            avgReach.toString();
+        }
+
+        return {
+          engagementRate: timeframeEngagementRate,
+          avgReach: timeframeAvgReach
+        };
+      };
+
+      const timeframeMetrics = getTimeframeSpecificMetrics();
+
       return {
         weekly: {
-          growth: instagramData.growthRate,
-          engagement: instagramData.engagementRate,
-          reach: estimatedWeeklyReach,
+          growth: instagramData.growthData?.canCalculateWeekly ? instagramData.growthRate || '--' : '--',
+          engagement: timeframeMetrics.engagementRate,
+          reach: timeframeMetrics.avgReach,
           timeLabel: 'This Week'
         },
         monthly: {
-          growth: instagramData.monthlyGrowth || instagramData.growthRate,
-          engagement: instagramData.engagementRate,
-          reach: instagramData.monthlyReach || estimatedMonthlyReach,
+          growth: instagramData.growthData?.canCalculateMonthly ? instagramData.monthlyGrowth || '--' : '--',
+          engagement: timeframeMetrics.engagementRate,
+          reach: timeframeMetrics.avgReach,
           timeLabel: 'This Month'
-        },
-        annual: {
-          growth: '+187%',
-          engagement: instagramData.engagementRate,
-          reach: Math.round(instagramData.followers * 35).toLocaleString(),
-          timeLabel: 'This Year'
         }
       }[period];
     }
 
-    const data: Record<TimeFrame, Metrics> = {
-      weekly: {
-        growth: '+8.2%',
-        engagement: '+24%',
-        reach: '15.3K',
-        timeLabel: 'This Week'
-      },
-      monthly: {
-        growth: '+31.5%',
-        engagement: '+18%',
-        reach: '68.7K',
-        timeLabel: 'This Month'
-      },
-      annual: {
-        growth: '+187%',
-        engagement: '+45%',
-        reach: '892K',
-        timeLabel: 'This Year'
-      }
+    // No Instagram data - return dashes for all metrics
+    return {
+      growth: '--',
+      engagement: '--',
+      reach: '--',
+      timeLabel: period === 'weekly' ? 'This Week' : 'This Month'
     };
-    return data[period];
   };
 
   const DashboardContent = () => {
@@ -1957,7 +2164,7 @@ const SocialSageMobile = () => {
           <h1 className="text-xl font-bold text-gray-900">SocialSage</h1>
           <div className="flex items-center space-x-2">
             <button 
-              onClick={() => window.location.href = '/logout'} 
+              onClick={() => alert('Logout functionality would go here')} 
               className="text-sm text-red-600 hover:text-red-700 px-2 py-1 rounded"
             >
               Logout
@@ -1991,8 +2198,7 @@ const SocialSageMobile = () => {
           <div className="flex bg-white/80 backdrop-blur-sm rounded-2xl p-1 shadow-sm border border-white/50">
             {[
               { key: 'weekly' as TimeFrame, label: 'Weekly' },
-              { key: 'monthly' as TimeFrame, label: 'Monthly' },
-              { key: 'annual' as TimeFrame, label: 'Annual' }
+              { key: 'monthly' as TimeFrame, label: 'Monthly' }
             ].map((period) => (
               <button
                 key={period.key}
@@ -2013,54 +2219,69 @@ const SocialSageMobile = () => {
           <div className="grid grid-cols-2 gap-3">
             <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
               <div className="text-xl font-bold text-blue-600">
-                {instagramData ? instagramData.followers.toLocaleString() : '12.4K'}
+                {instagramData ? instagramData.followers.toLocaleString() : '0'}
               </div>
               <div className="text-xs text-gray-600">Total Followers</div>
             </div>
             <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
-              <div className="text-xl font-bold text-emerald-600">{metrics.growth}</div>
-              <div className="text-xs text-gray-600">Growth Rate</div>
+              {timeFrame === 'weekly' ? (
+                <>
+                  {instagramData?.growthData?.canCalculateWeekly ? (
+                    <>
+                      <div className="text-xl font-bold text-emerald-600">
+                        {instagramData.growthRate}
+                      </div>
+                      <div className="text-xs text-gray-600">Weekly Growth</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-xl font-bold text-gray-400">--</div>
+                      <div className="text-xs text-gray-500">
+                        Available in {instagramData?.growthData?.daysUntilWeekly || 7}d
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  {instagramData?.growthData?.canCalculateMonthly ? (
+                    <>
+                      <div className="text-xl font-bold text-emerald-600">
+                        {instagramData.monthlyGrowth}
+                      </div>
+                      <div className="text-xs text-gray-600">Monthly Growth</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-xl font-bold text-gray-400">--</div>
+                      <div className="text-xs text-gray-500">
+                        Available in {instagramData?.growthData?.daysUntilMonthly || 30}d
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </div>
             <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
-              <div className="text-xl font-bold text-purple-600">{metrics.engagement}</div>
-              <div className="text-xs text-gray-600">Engagement</div>
+              <div className="text-xl font-bold text-purple-600">
+                {metrics.engagement}
+              </div>
+              <div className="text-xs text-gray-600">
+                Engagement Rate
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                {timeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+              </div>
             </div>
             <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
               <div className="text-xl font-bold text-orange-600">
-                {(() => {
-                  console.log('🔍 Dashboard Reach Debug:', {
-                    avgReach: instagramData?.avgReach,
-                    totalReach: instagramData?.totalReach,
-                    postsCount: instagramData?.recentPosts?.length,
-                    fallbackReach: metrics.reach,
-                    followers: instagramData?.followers
-                  });
-                  
-                  if (instagramData?.avgReach && instagramData.avgReach > 0) {
-                    if (instagramData.avgReach === instagramData.followers) {
-                      console.warn('⚠️ Avg reach equals follower count - this seems wrong, using fallback');
-                      return metrics.reach;
-                    }
-                    return instagramData.avgReach >= 1000 ? 
-                      `${(instagramData.avgReach / 1000).toFixed(1)}K` : 
-                      instagramData.avgReach.toString();
-                  }
-                  
-                  if (instagramData?.totalReach && instagramData?.recentPosts?.length) {
-                    const calculatedAvg = Math.round(instagramData.totalReach / instagramData.recentPosts.length);
-                    console.log('📊 Calculated avg reach from total:', calculatedAvg);
-                    if (calculatedAvg !== instagramData.followers) {
-                      return calculatedAvg >= 1000 ? 
-                        `${(calculatedAvg / 1000).toFixed(1)}K` : 
-                        calculatedAvg.toString();
-                    }
-                  }
-                  
-                  return metrics.reach;
-                })()}
+                {metrics.reach}
               </div>
               <div className="text-xs text-gray-600">
-                {instagramData?.avgReach ? 'Avg Reach' : 'Reach'} {metrics.timeLabel}
+                Avg Reach Per Post
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                {timeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
               </div>
             </div>
           </div>
@@ -2103,9 +2324,9 @@ const SocialSageMobile = () => {
     const [postsView, setPostsView] = useState('recent');
     const [postsTimeFrame, setPostsTimeFrame] = useState<PostsTimeFrame>('weekly');
 
-    // Use real posts data if available, otherwise fallback to demo data
+    // Use real posts data if available, otherwise show empty state
     const recentPosts: Post[] = instagramData?.recentPosts?.slice(0, 10).map((post, index) => {
-      const avgLikes = instagramData.avgLikes || 342;
+      const avgLikes = instagramData.avgLikes || 0;
       return {
         id: index + 1,
         platform: 'Instagram',
@@ -2116,103 +2337,67 @@ const SocialSageMobile = () => {
         metrics: { 
           likes: post.like_count || 0, 
           comments: post.comments_count || 0, 
-          shares: post.website_clicks || Math.floor(Math.random() * 50),
+          shares: post.website_clicks || 0,
           reach: calculateReach(post)
         },
-        performance: getPerformanceLevel(post.like_count || 0, avgLikes),
+        performance: avgLikes > 0 ? getPerformanceLevel(post.like_count || 0, avgLikes) : 'medium',
         caption: post.caption
       };
-    }) || [
-      {
-        id: 1,
-        platform: 'Instagram',
-        type: 'Reel',
-        title: 'Social Media Tips for 2025',
-        timestamp: '2h ago',
-        thumbnail: 'from-blue-400 to-purple-500',
-        metrics: { likes: 1247, comments: 89, shares: 34, reach: '5.2K' },
-        performance: 'high'
-      },
-      {
-        id: 2,
-        platform: 'Instagram',
-        type: 'Carousel',
-        title: 'Behind the Scenes: Content Creation',
-        timestamp: '5h ago',
-        thumbnail: 'from-pink-400 to-red-500',
-        metrics: { likes: 892, comments: 56, shares: 12, reach: '3.8K' },
-        performance: 'medium'
-      },
-      {
-        id: 3,
-        platform: 'Twitter/X',
-        type: 'Post',
-        title: 'Quick productivity hack thread',
-        timestamp: '8h ago',
-        thumbnail: 'from-gray-400 to-gray-600',
-        metrics: { likes: 445, comments: 23, shares: 67, reach: '2.1K' },
-        performance: 'medium'
-      },
-      {
-        id: 4,
-        platform: 'Instagram',
-        type: 'Story',
-        title: 'Morning routine poll',
-        timestamp: '1d ago',
-        thumbnail: 'from-green-400 to-teal-500',
-        metrics: { likes: 234, comments: 45, shares: 8, reach: '1.9K' },
-        performance: 'low'
-      }
-    ];
+    }) || [];
+
+    // Show empty state message if no posts
+    const hasNoPosts = recentPosts.length === 0;
 
     const getTopPosts = (timeframe: PostsTimeFrame): TopPost[] => {
-      if (instagramData?.recentPosts && instagramData.recentPosts.length > 0) {
-        const sortedPosts = [...instagramData.recentPosts]
-          .sort((a, b) => {
-            const aReach = a.reach || (a.like_count + a.comments_count) * 10;
-            const bReach = b.reach || (b.like_count + b.comments_count) * 10;
-            return bReach - aReach;
-          })
-          .slice(0, 10);
-
-        return sortedPosts.map((post, index) => ({
-          title: truncateCaption(post.caption),
-          type: post.media_type === 'VIDEO' ? 'Reel' : post.media_type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Post',
-          metrics: { 
-            likes: post.like_count || 0, 
-            comments: post.comments_count || 0, 
-            shares: post.website_clicks || Math.floor((post.like_count || 0) * 0.1),
-            reach: calculateReach(post)
-          },
-          performance: 'high' as const,
-          caption: post.caption
-        }));
+      if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
+        return [];
       }
 
-      const posts: Record<PostsTimeFrame, TopPost[]> = {
-        weekly: [
-          { title: 'Social Media Tips for 2025', type: 'Reel', metrics: { likes: 1247, comments: 89, shares: 34, reach: '5.2K' }, performance: 'high' },
-          { title: 'Content Creation Workflow', type: 'Carousel', metrics: { likes: 1089, comments: 76, shares: 28, reach: '4.8K' }, performance: 'high' },
-          { title: 'Instagram Algorithm Secrets', type: 'Post', metrics: { likes: 934, comments: 65, shares: 21, reach: '4.1K' }, performance: 'high' },
-          { title: 'Behind the Scenes Magic', type: 'Carousel', metrics: { likes: 823, comments: 54, shares: 19, reach: '3.7K' }, performance: 'high' },
-          { title: 'Quick Photography Tips', type: 'Reel', metrics: { likes: 756, comments: 43, shares: 16, reach: '3.2K' }, performance: 'high' }
-        ],
-        monthly: [
-          { title: 'Ultimate Social Media Guide', type: 'Carousel', metrics: { likes: 2341, comments: 156, shares: 67, reach: '12.4K' }, performance: 'high' },
-          { title: 'Viral Content Strategy', type: 'Reel', metrics: { likes: 1987, comments: 123, shares: 54, reach: '9.8K' }, performance: 'high' },
-          { title: 'Building Your Brand Online', type: 'Post', metrics: { likes: 1654, comments: 98, shares: 43, reach: '8.2K' }, performance: 'high' },
-          { title: 'Photography Masterclass', type: 'Carousel', metrics: { likes: 1432, comments: 87, shares: 38, reach: '7.1K' }, performance: 'high' },
-          { title: 'Content Planning Secrets', type: 'Reel', metrics: { likes: 1298, comments: 76, shares: 32, reach: '6.5K' }, performance: 'high' }
-        ],
-        annual: [
-          { title: 'Year in Review: Top Moments', type: 'Carousel', metrics: { likes: 5432, comments: 287, shares: 156, reach: '28.9K' }, performance: 'high' },
-          { title: 'Social Media Predictions 2025', type: 'Reel', metrics: { likes: 4321, comments: 234, shares: 124, reach: '24.1K' }, performance: 'high' },
-          { title: 'Behind the Brand Documentary', type: 'Video', metrics: { likes: 3876, comments: 189, shares: 98, reach: '19.7K' }, performance: 'high' },
-          { title: 'Best Content of 2024', type: 'Carousel', metrics: { likes: 3245, comments: 167, shares: 87, reach: '16.8K' }, performance: 'high' },
-          { title: 'Growth Journey Story', type: 'Reel', metrics: { likes: 2987, comments: 143, shares: 76, reach: '15.2K' }, performance: 'high' }
-        ]
-      };
-      return posts[timeframe];
+      const now = new Date();
+      let cutoffDate: Date;
+      
+      // Calculate cutoff date based on timeframe
+      if (timeframe === 'weekly') {
+        cutoffDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000)); // 7 days ago
+      } else if (timeframe === 'monthly') {
+        cutoffDate = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)); // 30 days ago
+      } else { // annual
+        cutoffDate = new Date(now.getFullYear(), 0, 1); // Start of current year
+      }
+      
+      // Filter posts by date range, then sort by performance
+      const filteredPosts = instagramData.recentPosts.filter(post => {
+        const postDate = new Date(post.timestamp);
+        return postDate >= cutoffDate;
+      });
+      
+      // Sort by engagement (likes + comments), then by reach as tiebreaker
+      const sortedPosts = filteredPosts.sort((a, b) => {
+        const aEngagement = (a.like_count || 0) + (a.comments_count || 0);
+        const bEngagement = (b.like_count || 0) + (b.comments_count || 0);
+        
+        if (aEngagement !== bEngagement) {
+          return bEngagement - aEngagement;
+        }
+        
+        // Use reach as tiebreaker
+        const aReach = a.reach || 0;
+        const bReach = b.reach || 0;
+        return bReach - aReach;
+      }).slice(0, 10);
+
+      return sortedPosts.map((post) => ({
+        title: truncateCaption(post.caption),
+        type: post.media_type === 'VIDEO' ? 'Reel' : post.media_type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Post',
+        metrics: { 
+          likes: post.like_count || 0, 
+          comments: post.comments_count || 0, 
+          shares: post.website_clicks || Math.floor((post.like_count || 0) * 0.1),
+          reach: calculateReach(post)
+        },
+        performance: 'high' as const,
+        caption: post.caption
+      }));
     };
 
     const getPerformanceColor = (performance: Performance) => {
@@ -2296,28 +2481,35 @@ const SocialSageMobile = () => {
                 <h2 className="text-lg font-semibold text-gray-900">Recent Posts</h2>
                 <div className="text-sm text-gray-500">{recentPosts.length} posts</div>
               </div>
-              {recentPosts.map((post) => {
-                const platformIcon = getPlatformIcon(post.platform);
-                const cardColors = [
-                  'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200',
-                  'bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200',
-                  'bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200',
-                  'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200',
-                  'bg-gradient-to-br from-purple-50 to-violet-50 border-purple-200',
-                  'bg-gradient-to-br from-cyan-50 to-sky-50 border-cyan-200',
-                  'bg-gradient-to-br from-red-50 to-pink-50 border-red-200',
-                  'bg-gradient-to-br from-green-50 to-lime-50 border-green-200',
-                  'bg-gradient-to-br from-yellow-50 to-amber-50 border-yellow-200',
-                  'bg-gradient-to-br from-gray-50 to-slate-50 border-gray-200'
-                ];
-                return (
-                  <div key={post.id} className={`${cardColors[(post.id - 1) % cardColors.length]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all`}>
-                    <div className="flex items-start space-x-3">
-                      <div className={`w-12 h-12 bg-gradient-to-br ${post.thumbnail} rounded-2xl flex items-center justify-center flex-shrink-0 shadow-sm`}>
-                        <span className="text-2xl">{getTypeEmoji(post.type)}</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between mb-2">
+              {hasNoPosts ? (
+                <div className="text-center py-8">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-gray-400 text-2xl">📱</span>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">No Posts Yet</h3>
+                  <p className="text-gray-600 text-sm">
+                    Connect your Instagram account and start posting to see your content analytics here.
+                  </p>
+                </div>
+              ) : (
+                recentPosts.map((post) => {
+                  const platformIcon = getPlatformIcon(post.platform);
+                  const cardColors = [
+                    'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200',
+                    'bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200',
+                    'bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-200',
+                    'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200',
+                    'bg-gradient-to-br from-purple-50 to-violet-50 border-purple-200',
+                    'bg-gradient-to-br from-cyan-50 to-sky-50 border-cyan-200',
+                    'bg-gradient-to-br from-red-50 to-pink-50 border-red-200',
+                    'bg-gradient-to-br from-green-50 to-lime-50 border-green-200',
+                    'bg-gradient-to-br from-yellow-50 to-amber-50 border-yellow-200',
+                    'bg-gradient-to-br from-gray-50 to-slate-50 border-gray-200'
+                  ];
+                  return (
+                    <div key={post.id} className={`${cardColors[(post.id - 1) % cardColors.length]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all`}>
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <h3 className="font-semibold text-gray-900 text-sm leading-tight mb-1">{post.title}</h3>
                             <div className="flex items-center space-x-2">
@@ -2334,29 +2526,43 @@ const SocialSageMobile = () => {
                           </div>
                         </div>
                         
-                        <div className="grid grid-cols-4 gap-3 text-center">
-                          <div className="bg-white/60 rounded-lg p-2">
+                        <div className="grid grid-cols-5 gap-3 text-center">
+                          <div className="bg-white/60 rounded-lg p-3">
+                            <Heart className="w-4 h-4 text-red-500 mx-auto mb-1" />
                             <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
                             <div className="text-xs text-gray-600">Likes</div>
                           </div>
-                          <div className="bg-white/60 rounded-lg p-2">
+                          <div className="bg-white/60 rounded-lg p-3">
+                            <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
                             <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
                             <div className="text-xs text-gray-600">Comments</div>
                           </div>
-                          <div className="bg-white/60 rounded-lg p-2">
+                          <div className="bg-white/60 rounded-lg p-3">
+                            <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
                             <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
                             <div className="text-xs text-gray-600">Shares</div>
                           </div>
-                          <div className="bg-white/60 rounded-lg p-2">
+                          <div className="bg-white/60 rounded-lg p-3">
+                            <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
                             <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
                             <div className="text-xs text-gray-600">Reach</div>
+                          </div>
+                          <div className="bg-white/60 rounded-lg p-3">
+                            <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
+                            <div className="text-sm font-bold text-gray-900">
+                              {post.metrics.reach !== '--' && post.metrics.likes > 0 ? 
+                                `${(((post.metrics.likes + post.metrics.comments) / (parseInt(post.metrics.reach.replace('K', '000').replace('.', '')) || post.metrics.likes + post.metrics.comments)) * 100).toFixed(1)}%` : 
+                                '--'
+                              }
+                            </div>
+                            <div className="text-xs text-gray-600">Eng Rate</div>
                           </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </>
           ) : (
             <>
@@ -2364,49 +2570,82 @@ const SocialSageMobile = () => {
                 <h2 className="text-lg font-semibold text-gray-900">
                   Top Posts {postsTimeFrame === 'weekly' ? 'This Week' : postsTimeFrame === 'monthly' ? 'This Month' : 'This Year'}
                 </h2>
-                <div className="text-sm text-gray-500">Top 10</div>
+                <div className="text-sm text-gray-500">{getTopPosts(postsTimeFrame).length > 0 ? `Top ${getTopPosts(postsTimeFrame).length}` : 'No posts'}</div>
               </div>
-              {getTopPosts(postsTimeFrame).map((post, index) => (
-                <div key={index} className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all">
-                  <div className="flex items-start space-x-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-sm">
-                      <span className="text-white text-sm font-bold">#{index + 1}</span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <h3 className="font-semibold text-gray-900 text-sm mb-1">{post.title}</h3>
-                          <div className="flex items-center space-x-2">
-                            <span className="text-xs text-gray-600 font-medium">{getTypeEmoji(post.type)} {post.type}</span>
-                            <div className="px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r from-yellow-100 to-orange-100 text-orange-700 border border-orange-200">
-                              Top Performer
+              {getTopPosts(postsTimeFrame).length > 0 ? (
+                getTopPosts(postsTimeFrame).map((post, index) => (
+                  <div key={index} className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all">
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
+                            <span className="text-white text-xs font-bold">#{index + 1}</span>
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-gray-900 text-sm mb-1">{post.title}</h3>
+                            <div className="flex items-center space-x-2">
+                              <span className="text-xs text-gray-600 font-medium">{getTypeEmoji(post.type)} {post.type}</span>
+                              <div className="px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r from-yellow-100 to-orange-100 text-orange-700 border border-orange-200">
+                                Top Performer
+                              </div>
                             </div>
                           </div>
                         </div>
                       </div>
                       
-                      <div className="grid grid-cols-4 gap-3 text-center">
-                        <div className="bg-white/70 rounded-lg p-2">
+                      <div className="grid grid-cols-5 gap-3 text-center">
+                        <div className="bg-white/70 rounded-lg p-3">
+                          <Heart className="w-4 h-4 text-red-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
                           <div className="text-xs text-gray-600">Likes</div>
                         </div>
-                        <div className="bg-white/70 rounded-lg p-2">
+                        <div className="bg-white/70 rounded-lg p-3">
+                          <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
                           <div className="text-xs text-gray-600">Comments</div>
                         </div>
-                        <div className="bg-white/70 rounded-lg p-2">
+                        <div className="bg-white/70 rounded-lg p-3">
+                          <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
                           <div className="text-xs text-gray-600">Shares</div>
                         </div>
-                        <div className="bg-white/70 rounded-lg p-2">
+                        <div className="bg-white/70 rounded-lg p-3">
+                          <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
                           <div className="text-xs text-gray-600">Reach</div>
+                        </div>
+                        <div className="bg-white/70 rounded-lg p-3">
+                          <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
+                          <div className="text-sm font-bold text-gray-900">
+                            {post.metrics.reach !== '--' && post.metrics.likes > 0 ? 
+                              `${(((post.metrics.likes + post.metrics.comments) / (parseInt(post.metrics.reach.replace('K', '000').replace('.', '')) || post.metrics.likes + post.metrics.comments)) * 100).toFixed(1)}%` : 
+                              '--'
+                            }
+                          </div>
+                          <div className="text-xs text-gray-600">Eng Rate</div>
                         </div>
                       </div>
                     </div>
                   </div>
+                ))
+              ) : (
+                <div className="text-center py-8">
+                  <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-amber-600 text-2xl">🏆</span>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                    No Posts for {postsTimeFrame === 'weekly' ? 'This Week' : postsTimeFrame === 'monthly' ? 'This Month' : 'This Year'}
+                  </h3>
+                  <p className="text-gray-600 text-sm">
+                    {postsTimeFrame === 'weekly' 
+                      ? 'Post some content this week to see your top performers!'
+                      : postsTimeFrame === 'monthly'
+                      ? 'Post some content this month to see your top performers!'
+                      : 'Post some content this year to see your top performers!'
+                    }
+                  </p>
                 </div>
-              ))}
+              )}
             </>
           )}
         </div>
@@ -2430,9 +2669,9 @@ const SocialSageMobile = () => {
     ];
 
     const connectedAccounts: Account[] = [
-      { platform: 'Instagram', username: instagramData?.username || '@socialsage_demo', connected: true, color: 'from-pink-500 to-orange-500' },
-      { platform: 'Twitter/X', username: '@socialsage_demo', connected: true, color: 'from-gray-800 to-black' },
-      { platform: 'LinkedIn', username: 'Social Sage Demo', connected: false, color: 'from-blue-600 to-blue-700' }
+      { platform: 'Instagram', username: instagramData?.username || 'Not connected', connected: !!instagramData, color: 'from-pink-500 to-orange-500' },
+      { platform: 'Twitter/X', username: 'Not available', connected: false, color: 'from-gray-800 to-black' },
+      { platform: 'LinkedIn', username: 'Not available', connected: false, color: 'from-blue-600 to-blue-700' }
     ];
 
     const handleMetricSelect = (metric: string) => {
@@ -2458,61 +2697,201 @@ const SocialSageMobile = () => {
     };
 
     const getAIRecommendations = (): AIRecommendation => {
-      const baseRecommendations: Record<string, AIRecommendation> = {
-        growth: {
-          title: "Boost Your Follower Growth",
+      if (!instagramData || !instagramData.recentPosts || instagramData.recentPosts.length === 0) {
+        // Fallback for users with no data
+        return {
+          title: "Connect Your Account for Personalized Insights",
           insights: [
-            `You currently have ${instagramData?.followers?.toLocaleString() || '12,400'} followers. Your growth rate is ${instagramData?.growthRate || '+8.2%'}.`,
-            "Stories get 3x more reach than posts. Create more behind-the-scenes content to increase discoverability.",
-            "Post consistently at optimal times when your audience is most active."
+            "Connect your Instagram account to get data-driven recommendations.",
+            "We need at least 5-10 posts to provide meaningful analysis.",
+            "Our AI will analyze your content performance, timing, and audience engagement patterns."
           ],
           actions: [
-            "Update your bio with a compelling hook and clear CTA",
-            "Create 5 story highlights showcasing your best content",
-            "Schedule posts for optimal times using our AI scheduler"
+            "Connect your Instagram Business or Creator account",
+            "Post consistently for 1-2 weeks to gather data",
+            "Return for personalized recommendations based on your performance"
           ]
-        },
-        engagement: {
-          title: "Increase Engagement Rate",
-          insights: [
-            `Your engagement rate is ${instagramData?.engagementRate || '4.2%'}, which is above industry average of 3.5%.`,
-            `Your average likes per post: ${instagramData?.avgLikes || '342'}. Average comments: ${instagramData?.avgComments || '18'}.`,
-            "Carousel posts have 45% higher engagement but you post them only 15% of the time."
-          ],
-          actions: [
-            "Add engaging questions to every caption",
-            "Create more carousel posts with tips and tutorials",
-            "Respond to comments within 1 hour for algorithm boost"
-          ]
-        },
-        timing: {
-          title: "Optimize Your Posting Times",
-          insights: [
-            "Based on your posting history, we've identified your best performing time slots.",
-            "Your top time slot gets significantly more engagement than average.",
-            "Consistent posting during peak times can increase reach by 40%."
-          ],
-          actions: [
-            "Post during your identified peak time slots",
-            "Avoid posting during low-activity hours",
-            "Use scheduling tools to maintain consistency"
-          ]
-        },
-        frequency: {
-          title: "Optimize Your Posting Frequency",
-          insights: [
-            `Your current posting frequency: ${instagramData ? calculateFrequencyOptimization(instagramData.recentPosts || []).currentFrequency : '2.5'} posts/week`,
-            `Optimal frequency for your account: ${instagramData ? calculateFrequencyOptimization(instagramData.recentPosts || []).optimalFrequency : '3.5'} posts/week`,
-            "Posting too frequently can decrease individual post performance."
-          ],
-          actions: [
-            "Adjust to your optimal posting frequency",
-            "Focus on quality over quantity",
-            "Plan content calendar for consistent posting"
-          ]
+        };
+      }
+
+      // Real data-driven analysis based on selected metric
+      const timingData = calculateTimingOptimization(instagramData.recentPosts);
+      const frequencyData = calculateFrequencyOptimization(instagramData.recentPosts);
+      
+      // Calculate content type performance
+      const contentTypeAnalysis = () => {
+        const typeGroups = new Map();
+        if (instagramData.recentPosts) {
+          instagramData.recentPosts.forEach(post => {
+            let type = 'Post';
+            if (post.media_type === 'VIDEO') type = 'Reel';
+            else if (post.media_type === 'CAROUSEL_ALBUM') type = 'Carousel';
+            
+            if (!typeGroups.has(type)) {
+              typeGroups.set(type, { posts: [], totalEngagement: 0, totalReach: 0 });
+            }
+            
+            const group = typeGroups.get(type);
+            group.posts.push(post);
+            group.totalEngagement += (post.like_count || 0) + (post.comments_count || 0);
+            group.totalReach += post.reach || 0;
+          });
         }
+
+        return Array.from(typeGroups.entries()).map(([type, data]) => ({
+          type,
+          count: data.posts.length,
+          avgEngagement: Math.round(data.totalEngagement / data.posts.length),
+          avgReach: Math.round(data.totalReach / data.posts.length),
+          engagementRate: data.totalReach > 0 ? 
+            (((data.totalEngagement / data.totalReach) * 100).toFixed(1) + '%') : 
+            'N/A'
+        })).sort((a, b) => b.avgEngagement - a.avgEngagement);
       };
-      return baseRecommendations[selectedMetric] || baseRecommendations.growth;
+
+      const contentTypes = contentTypeAnalysis();
+      const bestContentType = contentTypes[0];
+      const worstContentType = contentTypes[contentTypes.length - 1];
+
+      // Calculate engagement trends
+      const calculateEngagementTrend = () => {
+        const sortedPosts = [...(instagramData.recentPosts || [])].sort((a, b) => 
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        
+        const half = Math.floor(sortedPosts.length / 2);
+        const firstHalf = sortedPosts.slice(0, half);
+        const secondHalf = sortedPosts.slice(half);
+        
+        const firstHalfAvg = firstHalf.reduce((sum, post) => 
+          sum + (post.like_count || 0) + (post.comments_count || 0), 0) / firstHalf.length;
+        const secondHalfAvg = secondHalf.reduce((sum, post) => 
+          sum + (post.like_count || 0) + (post.comments_count || 0), 0) / secondHalf.length;
+        
+        const change = ((secondHalfAvg - firstHalfAvg) / firstHalfAvg * 100);
+        return {
+          trend: change > 5 ? 'increasing' : change < -5 ? 'decreasing' : 'stable',
+          percentage: Math.abs(change).toFixed(1)
+        };
+      };
+
+      const engagementTrend = calculateEngagementTrend();
+
+      // Industry benchmarks (realistic social media benchmarks)
+      const industryBenchmarks = {
+        engagementRate: 3.5, // Industry average
+        postsPerWeek: 3.5,
+        avgLikes: 200,
+        avgComments: 15
+      };
+
+      const userEngagementRate = parseFloat(instagramData.engagementRate?.replace('%', '') || '0');
+      const isAboveAverage = userEngagementRate > industryBenchmarks.engagementRate;
+
+    const recommendations: Record<string, AIRecommendation> = {
+      growth: {
+        title: "Data-Driven Growth Strategy",
+        insights: [
+        `You have ${instagramData.followers.toLocaleString()} followers with ${instagramData.growthData?.canCalculateWeekly ? instagramData.growthRate : 'steady'} growth rate.`,
+        `Your engagement rate of ${instagramData.engagementRate} is ${isAboveAverage ? `${(userEngagementRate - industryBenchmarks.engagementRate).toFixed(1)}% above` : `${(industryBenchmarks.engagementRate - userEngagementRate).toFixed(1)}% below`} the industry average of ${industryBenchmarks.engagementRate}%.`,
+        `Profile visits: ${instagramData.accountInsights?.profile_visits?.toLocaleString() || 'N/A'} in the last 30 days. ${(instagramData.accountInsights?.profile_visits || 0) > 1000 ? 'Strong discovery performance!' : 'Room for improvement in discoverability.'}`
+        ],
+        actions: [
+        bestContentType ? `Focus on ${bestContentType.type.toLowerCase()}s - they get ${bestContentType.avgEngagement} avg engagement vs your overall ${instagramData.avgLikes} avg` : "Analyze your best performing content types",
+        timingData.timeSlots.length > 0 ? `Post during your peak time: ${timingData.timeSlots[0].time} (${timingData.timeSlots[0].avgLikes} avg likes)` : "Experiment with different posting times",
+        isAboveAverage ? "Maintain your above-average engagement with consistent quality content" : "Focus on increasing engagement rate with more interactive content"
+        ]
+      },
+      engagement: {
+        title: "Engagement Optimization Analysis",
+        insights: [
+        `Your posts average ${instagramData.avgLikes} likes and ${(instagramData.avgComments ?? 0)} comments. Engagement is ${engagementTrend.trend} by ${engagementTrend.percentage}% over time.`,
+        bestContentType ? `${bestContentType.type}s are your strongest format with ${bestContentType.engagementRate} engagement rate (${bestContentType.count} posts analyzed).` : "Analyzing your content performance patterns.",
+        `Your audience is most active during ${timingData.timeSlots[0]?.time || 'evening hours'}. ${timingData.timeSlots.length} optimal time slots identified.`
+        ],
+        actions: [
+        bestContentType && worstContentType && contentTypes.length > 1 ? 
+          `Double down on ${bestContentType.type.toLowerCase()}s (${bestContentType.avgEngagement} avg engagement) and improve your ${worstContentType.type.toLowerCase()}s (${worstContentType.avgEngagement} avg)` : 
+          "Continue creating your best performing content types",
+        `Post during your top 3 time slots: ${timingData.timeSlots.slice(0, 3).map(slot => slot.time).join(', ')}`,
+        (instagramData.avgComments ?? 0) < (instagramData.avgLikes ?? 0) * 0.1 ? 
+          "Increase comments by asking questions in captions - your comment rate is below optimal" : 
+          "Maintain strong comment engagement with interactive captions"
+        ]
+      },
+      timing: {
+        title: "Optimal Timing Strategy",
+        insights: [
+        `Analysis of ${instagramData.recentPosts.length} posts shows your best performing time is ${timingData.timeSlots[0]?.time} with ${timingData.timeSlots[0]?.avgLikes} average likes.`,
+        `You've tested ${timingData.timeSlots.length} different time slots. Your top 3 slots outperform others by an average of ${timingData.timeSlots.length > 2 ? Math.round(((timingData.timeSlots[0]?.avgLikes + timingData.timeSlots[1]?.avgLikes + timingData.timeSlots[2]?.avgLikes) / 3 - (instagramData.avgLikes || 0)) / (instagramData.avgLikes || 1) * 100) : 25}%.`,
+        `Consistency analysis: ${frequencyData.currentFrequency < 2 ? 'Post more regularly for algorithm favor' : frequencyData.currentFrequency > 5 ? 'Consider reducing frequency to avoid audience fatigue' : 'Good posting consistency'}.`
+        ],
+        actions: [
+        `Schedule posts for ${timingData.timeSlots[0]?.time} - your highest engagement window`,
+        timingData.timeSlots.length > 1 ? `Alternate between your top ${Math.min(3, timingData.timeSlots.length)} time slots for optimal reach` : "Test 2-3 additional time slots to find more opportunities",
+        `Avoid posting during low-performance hours to maximize your content's potential reach`
+        ]
+      },
+      frequency: {
+        title: "Posting Frequency Optimization",
+        insights: [
+        `Current frequency: ${frequencyData.currentFrequency} posts/week. Optimal frequency for your audience: ${frequencyData.optimalFrequency} posts/week.`,
+        `Your best performing frequency range is ${frequencyData.performanceByFrequency[0]?.range} with ${frequencyData.performanceByFrequency[0]?.avgEngagement} average engagement.`,
+        frequencyData.currentFrequency < frequencyData.optimalFrequency ? 
+          `You're under-posting by ${(frequencyData.optimalFrequency - frequencyData.currentFrequency).toFixed(1)} posts/week, potentially missing ${Math.round((frequencyData.optimalFrequency - frequencyData.currentFrequency) * 52)} opportunities per year.` :
+          frequencyData.currentFrequency > frequencyData.optimalFrequency ? 
+          `You may be over-posting. Reducing to ${frequencyData.optimalFrequency}/week could improve individual post performance.` :
+          `Your current frequency aligns well with optimal performance.`
+        ],
+        actions: [
+        frequencyData.currentFrequency !== frequencyData.optimalFrequency ? 
+          `Adjust to ${frequencyData.optimalFrequency} posts per week for optimal audience engagement` : 
+          "Maintain your current posting frequency",
+        `Focus on the ${frequencyData.performanceByFrequency[0]?.range} range - your highest performing frequency`,
+        "Plan content in advance to maintain consistency and quality at your optimal frequency"
+        ]
+      },
+      content: {
+        title: "Content Performance Intelligence",
+        insights: [
+        bestContentType ? 
+          `${bestContentType.type}s are your top format: ${bestContentType.avgEngagement} avg engagement (${bestContentType.count} posts), ${bestContentType.engagementRate} engagement rate.` :
+          "Analyzing your content format performance.",
+        contentTypes.length > 1 ? 
+          `Performance gap: ${bestContentType.type}s outperform ${worstContentType.type}s by ${Math.round((bestContentType.avgEngagement - worstContentType.avgEngagement) / (worstContentType.avgEngagement || 1) * 100)}%.` :
+          "Need more diverse content types for comprehensive analysis.",
+        `Your content reaches an average of ${instagramData.avgReach?.toLocaleString() || 'N/A'} people per post. ${(instagramData.avgReach || 0) > (instagramData.followers * 0.1) ? 'Strong reach performance!' : 'Opportunity to improve reach.'}`
+        ],
+        actions: [
+        bestContentType ? 
+          `Create more ${bestContentType.type.toLowerCase()}s - they generate ${bestContentType.avgEngagement} avg engagement vs your ${instagramData.avgLikes} overall average` :
+          "Test different content formats to find your best performers",
+        contentTypes.length > 1 && worstContentType ? 
+          `Improve your ${worstContentType.type.toLowerCase()} strategy - currently averaging only ${worstContentType.avgEngagement} engagement` :
+          "Experiment with carousels, reels, and single posts to diversify",
+        `${(instagramData.avgComments ?? 0) < 20 ? 'Increase comment engagement with questions and polls' : 'Maintain strong comment engagement'} - comments boost algorithmic reach`
+        ]
+      },
+      reach: {
+        title: "Audience Reach Analysis",
+        insights: [
+        `Your posts reach an average of ${instagramData.avgReach?.toLocaleString() || 'calculating'} people (${instagramData.avgReach ? ((instagramData.avgReach / instagramData.followers) * 100).toFixed(1) : 'N/A'}% of your followers).`,
+        `Total reach in the last 30 days: ${instagramData.accountInsights?.reach ? (instagramData.accountInsights.reach / 1000).toFixed(1) + 'K' : 'N/A'}. ${(instagramData.accountInsights?.reach || 0) > instagramData.followers * 2 ? 'Excellent reach performance!' : 'Room to improve reach.'}`,
+        bestContentType ? 
+          `${bestContentType.type}s achieve the best reach with ${bestContentType.avgReach.toLocaleString()} average reach per post.` :
+          "Analyzing which content types achieve the best reach."
+        ],
+        actions: [
+        bestContentType ? 
+          `Focus on ${bestContentType.type.toLowerCase()}s for maximum reach - they average ${bestContentType.avgReach.toLocaleString()} vs your overall ${instagramData.avgReach?.toLocaleString() || 'average'}` :
+          "Test different content formats to maximize reach",
+        `Post during peak engagement times (${timingData.timeSlots.slice(0, 2).map(slot => slot.time).join(' and ')}) to boost reach`,
+        `${(instagramData.accountInsights?.reach || 0) < instagramData.followers ? 'Use trending hashtags and engaging captions to expand beyond your follower base' : 'Continue leveraging your strong reach performance'}`
+        ]
+      }
+    };
+
+      return recommendations[selectedMetric] || recommendations.growth;
     };
 
     return (
@@ -3005,6 +3384,37 @@ const SocialSageMobile = () => {
     const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
     const [showAbout, setShowAbout] = useState(false);
     const [showHelpSupport, setShowHelpSupport] = useState(false);
+    const [isDisconnectingInstagram, setIsDisconnectingInstagram] = useState(false);
+
+    // Handler for Instagram connect/disconnect
+    const handleInstagramAuth = async () => {
+      if (instagramData) {
+        // Disconnect Instagram
+        if (isDisconnectingInstagram) return; // Prevent double clicks
+        
+        setIsDisconnectingInstagram(true);
+        try {
+          // Simulate disconnect
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          setInstagramData(null);
+          alert('Instagram account disconnected successfully!');
+        } catch (error) {
+          console.error('❌ Failed to disconnect Instagram:', error);
+          alert('Failed to disconnect Instagram. Please try again.');
+        } finally {
+          setIsDisconnectingInstagram(false);
+        }
+      } else {
+        // Connect Instagram
+        try {
+          // Simulate connect
+          alert('In a real app, this would redirect to Instagram OAuth!');
+        } catch (error) {
+          console.error('❌ Failed to start Instagram connection:', error);
+          alert('Failed to connect Instagram. Please try again.');
+        }
+      }
+    };
 
     const PrivacyPolicyModal = () => (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -3191,7 +3601,7 @@ const SocialSageMobile = () => {
           
           <button 
             onClick={() => setShowHelpSupport(false)}
-            className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-colors"
+            className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-all"
           >
             Got It
           </button>
@@ -3212,9 +3622,9 @@ const SocialSageMobile = () => {
                 <User className="w-8 h-8 text-white" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-900">John Doe</h2>
-                <p className="text-gray-600">Social Media Manager</p>
-                <p className="text-sm text-gray-500">Premium Plan</p>
+                <h2 className="text-lg font-bold text-gray-900">Your Account</h2>
+                <p className="text-gray-600">Social Media Analytics</p>
+                <p className="text-sm text-gray-500">SocialSage User</p>
               </div>
             </div>
           </div>
@@ -3223,7 +3633,13 @@ const SocialSageMobile = () => {
             <h3 className="font-semibold text-gray-900 mb-3">Accounts</h3>
             <div className="space-y-3">
               {[
-                { platform: 'Instagram', connected: !!instagramData, color: 'bg-pink-500', username: instagramData?.username },
+                { 
+                  platform: 'Instagram', 
+                  connected: !!instagramData, 
+                  color: 'bg-pink-500', 
+                  username: instagramData?.username,
+                  isLoading: isDisconnectingInstagram
+                },
                 { platform: 'Twitter/X', connected: false, color: 'bg-black', comingSoon: true },
                 { platform: 'YouTube', connected: false, color: 'bg-red-600', comingSoon: true },
                 { platform: 'TikTok', connected: false, color: 'bg-gray-900', comingSoon: true }
@@ -3244,14 +3660,33 @@ const SocialSageMobile = () => {
                       )}
                     </div>
                   </div>
-                  <div className={`px-3 py-1 rounded-full text-xs ${
-                    account.connected ? 'bg-green-100 text-green-800' : 
-                    account.comingSoon ? 'bg-orange-100 text-orange-800' :
-                    'bg-gray-100 text-gray-600'
-                  }`}>
-                    {account.connected ? 'Connected' : 
-                     account.comingSoon ? 'Coming Soon' : 'Connect'}
-                  </div>
+                  
+                  {account.platform === 'Instagram' ? (
+                    <button
+                      onClick={handleInstagramAuth}
+                      disabled={account.isLoading}
+                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        account.connected 
+                          ? 'bg-red-100 text-red-800 border-red-200 hover:bg-red-200' 
+                          : 'bg-green-100 text-green-800 border-green-200 hover:bg-green-200'
+                      } ${account.isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {account.isLoading ? (
+                        <div className="flex items-center space-x-1">
+                          <div className="animate-spin w-3 h-3 border border-red-600 border-t-transparent rounded-full"></div>
+                          <span>Wait...</span>
+                        </div>
+                      ) : (
+                        account.connected ? 'Disconnect' : 'Connect'
+                      )}
+                    </button>
+                  ) : (
+                    <div className={`px-3 py-1 rounded-full text-xs ${
+                      account.comingSoon ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {account.comingSoon ? 'Coming Soon' : 'Connect'}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

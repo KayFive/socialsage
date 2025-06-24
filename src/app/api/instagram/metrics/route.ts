@@ -50,6 +50,25 @@ interface PostWithInsights {
   comments?: Comment[];
 }
 
+// Conservative growth calculation interface
+interface RealGrowthCalculation {
+  weeklyGrowthRate: string | null;
+  monthlyGrowthRate: string | null;
+  canCalculateWeekly: boolean;
+  canCalculateMonthly: boolean;
+  daysOfData: number;
+  dataAvailableSince: string | null;
+  daysUntilWeekly: number;
+  daysUntilMonthly: number;
+}
+
+// Interface for historical data
+interface HistoricalDataPoint {
+  date: string;
+  followers: number;
+  isComplete: boolean;
+}
+
 // EXTENDED: Helper function to fetch ALL comments for a post with pagination
 async function fetchAllComments(postId: string, accessToken: string): Promise<Comment[]> {
   const allComments: Comment[] = [];
@@ -335,6 +354,7 @@ async function fetchPostInsights(postId: string, accessToken: string, basicPost?
   }
   
   // All insights attempts failed, use basic post data as fallback
+  console.log(`⚠️ All insights attempts failed for post ${postId}, using fallback`);
   if (basicPost) {
     return {
       reach: 0,
@@ -403,7 +423,8 @@ function calculateOptimalTimes(posts: PostWithInsights[]) {
       hour: hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`,
       activity: Math.round((combinedScore[hour] / maxScore) * 100) || 0,
       label: hour.toString(),
-      reach: Math.round(averageReach[hour])
+      reach: Math.round(averageReach[hour]),
+      postCount: hourlyCounts[hour]
     }))
   }
 }
@@ -470,9 +491,269 @@ function analyzeContentTypes(posts: PostWithInsights[]) {
   return contentAnalysis
 }
 
+// CONSERVATIVE: Calculate real growth rates only when we have sufficient data
+async function calculateRealGrowthRates(
+  supabase: any, 
+  instagramAccountId: string, 
+  currentFollowers: number
+): Promise<RealGrowthCalculation> {
+  
+  // Get historical snapshots
+  const { data: snapshots, error } = await supabase
+    .from('daily_snapshots')
+    .select('snapshot_date, followers_count')
+    .eq('instagram_account_id', instagramAccountId)
+    .order('snapshot_date', { ascending: true })
+
+  if (error || !snapshots || snapshots.length === 0) {
+    return {
+      weeklyGrowthRate: null,
+      monthlyGrowthRate: null,
+      canCalculateWeekly: false,
+      canCalculateMonthly: false,
+      daysOfData: 0,
+      dataAvailableSince: null,
+      daysUntilWeekly: 7,
+      daysUntilMonthly: 30
+    }
+  }
+
+  const oldestSnapshot = snapshots[0]
+  const newestSnapshot = snapshots[snapshots.length - 1]
+  const daysOfData = Math.floor(
+    (new Date(newestSnapshot.snapshot_date).getTime() - new Date(oldestSnapshot.snapshot_date).getTime()) 
+    / (1000 * 60 * 60 * 24)
+  ) + 1 // +1 to include today
+
+  const dataAvailableSince = new Date(oldestSnapshot.snapshot_date).toLocaleDateString('en-US', { 
+    month: 'short', 
+    day: 'numeric',
+    year: 'numeric'
+  })
+
+  // Calculate days until we can show each metric
+  const daysUntilWeekly = Math.max(0, 7 - daysOfData)
+  const daysUntilMonthly = Math.max(0, 30 - daysOfData)
+
+  // Only calculate weekly growth if we have 7+ days of data
+  let weeklyGrowthRate = null
+  let canCalculateWeekly = false
+  
+  if (daysOfData >= 7) {
+    const weekAgoTarget = new Date()
+    weekAgoTarget.setDate(weekAgoTarget.getDate() - 7)
+    
+    // Find closest snapshot to 7 days ago (within 2 days tolerance)
+    const weekAgoSnapshot = findClosestSnapshot(snapshots, weekAgoTarget, 2)
+    
+    if (weekAgoSnapshot && weekAgoSnapshot.followers_count > 0) {
+      const weeklyGrowth = ((currentFollowers - weekAgoSnapshot.followers_count) / weekAgoSnapshot.followers_count) * 100
+      weeklyGrowthRate = weeklyGrowth >= 0 ? `+${weeklyGrowth.toFixed(1)}%` : `${weeklyGrowth.toFixed(1)}%`
+      canCalculateWeekly = true
+    }
+  }
+
+  // Only calculate monthly growth if we have 30+ days of data
+  let monthlyGrowthRate = null
+  let canCalculateMonthly = false
+  
+  if (daysOfData >= 30) {
+    const monthAgoTarget = new Date()
+    monthAgoTarget.setDate(monthAgoTarget.getDate() - 30)
+    
+    // Find closest snapshot to 30 days ago (within 5 days tolerance)
+    const monthAgoSnapshot = findClosestSnapshot(snapshots, monthAgoTarget, 5)
+    
+    if (monthAgoSnapshot && monthAgoSnapshot.followers_count > 0) {
+      const monthlyGrowth = ((currentFollowers - monthAgoSnapshot.followers_count) / monthAgoSnapshot.followers_count) * 100
+      monthlyGrowthRate = monthlyGrowth >= 0 ? `+${monthlyGrowth.toFixed(1)}%` : `${monthlyGrowth.toFixed(1)}%`
+      canCalculateMonthly = true
+    }
+  }
+
+  return {
+    weeklyGrowthRate,
+    monthlyGrowthRate,
+    canCalculateWeekly,
+    canCalculateMonthly,
+    daysOfData,
+    dataAvailableSince,
+    daysUntilWeekly,
+    daysUntilMonthly
+  }
+}
+
+function findClosestSnapshot(snapshots: any[], targetDate: Date, maxDaysTolerance: number) {
+  let closest = null
+  let closestDiff = Infinity
+  
+  for (const snapshot of snapshots) {
+    const snapshotDate = new Date(snapshot.snapshot_date)
+    const diff = Math.abs(snapshotDate.getTime() - targetDate.getTime())
+    
+    if (diff < closestDiff) {
+      closestDiff = diff
+      closest = snapshot
+    }
+  }
+  
+  // Only return if within tolerance
+  const maxDiffMs = maxDaysTolerance * 24 * 60 * 60 * 1000
+  return closestDiff <= maxDiffMs ? closest : null
+}
+
+// Function to capture daily snapshots with complete data
+async function captureDailySnapshot(
+  supabase: any, 
+  instagramAccountId: string, 
+  metricsData: any,
+  postsWithInsights: PostWithInsights[]
+) {
+  try {
+    const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
+    
+    // Calculate aggregated data from posts
+    const totalSaves = postsWithInsights.reduce((sum, post) => sum + (post.insights.saved || 0), 0);
+    const totalShares = postsWithInsights.reduce((sum, post) => sum + (post.insights.shares || 0), 0);
+    
+    const snapshotData = {
+      instagram_account_id: instagramAccountId,
+      snapshot_date: today,
+      followers_count: metricsData.followers || 0,
+      following_count: 0, // Would need to fetch this separately if needed
+      media_count: metricsData.mediaCount || 0,
+      total_likes: metricsData.avgLikes ? metricsData.avgLikes * metricsData.mediaCount : 0,
+      total_comments: metricsData.avgComments ? metricsData.avgComments * metricsData.mediaCount : 0,
+      total_shares: totalShares,
+      total_saves: totalSaves,
+      engagement_rate: parseFloat(metricsData.engagementRate?.replace('%', '') || '0'),
+      avg_likes_per_post: metricsData.avgLikes || 0,
+      avg_comments_per_post: metricsData.avgComments || 0,
+      total_reach: metricsData.totalReach || 0,
+      total_impressions: metricsData.totalImpressions || 0,
+      posts_published_count: postsWithInsights.length || 0,
+      raw_profile_data: {
+        username: metricsData.username,
+        followers: metricsData.followers,
+        mediaCount: metricsData.mediaCount
+      },
+      raw_insights_data: {
+        accountInsights: metricsData.accountInsights,
+        topFollowers: metricsData.topFollowers,
+        timingAnalysis: metricsData.timingAnalysis,
+        contentAnalysis: metricsData.contentAnalysis
+      }
+    }
+    
+    // Upsert daily snapshot (update if exists for today, insert if not)
+    const { data, error } = await supabase
+      .from('daily_snapshots')
+      .upsert(snapshotData, {
+        onConflict: 'instagram_account_id,snapshot_date'
+      })
+      .select()
+    
+    if (error) {
+      console.error('❌ Failed to capture daily snapshot:', error)
+    } else {
+      console.log('✅ Daily snapshot captured successfully')
+    }
+    
+    return { success: !error, data }
+  } catch (error) {
+    console.error('❌ Error in captureDailySnapshot:', error)
+    return { success: false, error }
+  }
+}
+
+// NEW: Function to fetch historical data for charts
+async function fetchHistoricalData(
+  supabase: any, 
+  instagramAccountId: string,
+  currentFollowers: number
+): Promise<{ weekly: HistoricalDataPoint[], monthly: HistoricalDataPoint[] }> {
+  try {
+    // Fetch weekly snapshots
+    const weeklyResponse = await fetch(
+      `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/instagram/weekly-snapshots`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': await cookies().toString()
+        }
+      }
+    );
+    
+    // Fetch monthly snapshots
+    const monthlyResponse = await fetch(
+      `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/instagram/monthly-snapshots`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': await cookies().toString()
+        }
+      }
+    );
+
+    let weekly: HistoricalDataPoint[] = []
+    let monthly: HistoricalDataPoint[] = []
+
+    if (weeklyResponse.ok) {
+      const weeklyData = await weeklyResponse.json()
+      weekly = weeklyData.snapshots || []
+    }
+
+    if (monthlyResponse.ok) {
+      const monthlyData = await monthlyResponse.json()
+      monthly = monthlyData.snapshots?.map((snapshot: any) => ({
+        date: snapshot.month,
+        followers: snapshot.followers_count,
+        isComplete: snapshot.is_final
+      })) || []
+    }
+
+    // Ensure current data is included
+    const now = new Date()
+    
+    // Add current week if not included
+    if (weekly.length > 0) {
+      const lastWeeklyDate = new Date(weekly[weekly.length - 1].date)
+      const currentWeekStart = new Date(now)
+      currentWeekStart.setDate(now.getDate() - now.getDay())
+      
+      if (lastWeeklyDate < currentWeekStart) {
+        weekly.push({
+          date: currentWeekStart.toISOString().split('T')[0],
+          followers: currentFollowers,
+          isComplete: false
+        })
+      }
+    }
+    
+    // Add current month if not included
+    if (monthly.length > 0) {
+      const lastMonthlyDate = monthly[monthly.length - 1].date
+      const currentMonth = now.toISOString().slice(0, 7)
+      
+      if (lastMonthlyDate < currentMonth) {
+        monthly.push({
+          date: currentMonth,
+          followers: currentFollowers,
+          isComplete: false
+        })
+      }
+    }
+
+    return { weekly, monthly }
+  } catch (error) {
+    console.error('Error fetching historical data:', error)
+    return { weekly: [], monthly: [] }
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
-    console.log('📊 Instagram metrics API called (EXTENDED VERSION - 6+ Months History)')
+    console.log('📊 Instagram metrics API called (ENHANCED VERSION WITH HISTORICAL DATA)')
     
     // Modern Supabase SSR approach - Next.js 15 compatible
     const cookieStore = await cookies()
@@ -510,7 +791,7 @@ export async function GET(request: NextRequest) {
     // Get Instagram account
     const { data: instagramAccount, error: igError } = await supabase
       .from('instagram_accounts')
-      .select('access_token, instagram_id, username')
+      .select('id, access_token, instagram_id, username, created_at')
       .eq('user_id', user.id)
       .eq('is_active', true)
       .single()
@@ -579,7 +860,7 @@ export async function GET(request: NextRequest) {
     let totalEngagement = 0
     let totalReach = 0
     let totalViews = 0
-    let engagementRate = '4.2%'
+    let engagementRate = '0%'
     let timingAnalysis = null
     let contentAnalysis = null
     let calculatedAccountInsights = null
@@ -686,16 +967,18 @@ export async function GET(request: NextRequest) {
           total_interactions: totalInteractions
         }
         
-        // Calculate more accurate engagement rate
+        // Calculate engagement rate ONLY if we have reach data
         if (totalReach > 0) {
           const realEngagementRate = ((totalEngagement / totalReach) * 100)
           engagementRate = `${realEngagementRate.toFixed(1)}%`
-          console.log('✅ Using enhanced engagement rate based on reach:', engagementRate)
-        } else {
-          // Fallback to follower-based calculation
+          console.log('✅ Using real engagement rate based on reach:', engagementRate)
+        } else if (postsWithInsights.length > 0) {
+          // Fallback to follower-based calculation only if we have posts
           const engagementPercent = ((totalEngagement / (profileData.followers_count * postsWithInsights.length)) * 100)
           engagementRate = `${engagementPercent.toFixed(1)}%`
           console.log('⚠️ Using fallback engagement rate based on followers:', engagementRate)
+        } else {
+          engagementRate = '0%'
         }
 
         // Analyze timing patterns with enhanced data
@@ -730,127 +1013,165 @@ export async function GET(request: NextRequest) {
       return new Date(dateString).toLocaleDateString();
     }
 
-    // Get historical data for growth calculation
-    const currentFollowers = profileData.followers_count || 0
-    const estimatedWeeklyGrowth = Math.max(0.5, Math.min(15, (currentFollowers / 1000) * 0.8))
-    const growthRate = `+${estimatedWeeklyGrowth.toFixed(1)}%`
-    
-    // Estimate monthly metrics
-    const monthlyGrowth = `+${(estimatedWeeklyGrowth * 4.33).toFixed(1)}%`
-    const monthlyReach = Math.round(currentFollowers * 2.8)
+    // CONSERVATIVE: Calculate real growth rates
+    const realGrowthData = await calculateRealGrowthRates(
+      supabase, 
+      instagramAccount.id, 
+      profileData.followers_count
+    )
 
-    // Generate dynamic notifications based on enhanced data
-    const generateNotifications = () => {
-      const notifications = []
-      const now = new Date()
+    // NEW: Fetch historical data for charts
+    const historicalData = await fetchHistoricalData(
+      supabase,
+      instagramAccount.id,
+      profileData.followers_count
+    )
+
+    // Generate dynamic notifications based on real user data (no fake data)
+    const generateRealNotifications = () => {
+      const notifications = [];
+      const now = new Date();
+      const currentHour = now.getHours();
       
-      // Check if it's optimal posting time
-      if (timingAnalysis && timingAnalysis.peakHours.includes(now.getHours())) {
-        notifications.push({
-          type: 'AI Suggestion',
-          message: 'Perfect time to post! Your audience is most active now.',
-          time: 'now',
-          bg: 'bg-blue-50',
-          icon: 'bg-blue-500'
-        })
+      // 1. OPTIMAL POSTING TIME ALERTS (only if we have timing data)
+      if (timingAnalysis && timingAnalysis.peakHours.length > 0) {
+        const isWeekday = now.getDay() >= 1 && now.getDay() <= 5;
+        if (isWeekday && timingAnalysis.peakHours.includes(currentHour)) {
+          notifications.push({
+            type: 'AI Suggestion',
+            message: 'Perfect time to post! Based on your posting history, your audience is most active now.',
+            time: 'now',
+            bg: 'bg-blue-50',
+            icon: 'bg-blue-500',
+            priority: 'high'
+          });
+        }
       }
       
-      // EXTENDED: Enhanced notifications with 6+ months of data
+      // 2. HIGH PERFORMING POST ALERTS (only with real data)
+      if (postsWithInsights.length > 0 && avgLikes > 0) {
+        const recentHighPerformer = postsWithInsights.find(post => 
+          (post.like_count || 0) > avgLikes * 1.5
+        );
+        
+        if (recentHighPerformer) {
+          const timeAgo = Math.floor((now.getTime() - new Date(recentHighPerformer.timestamp).getTime()) / (1000 * 60 * 60));
+          notifications.push({
+            type: 'Engagement Alert',
+            message: `Your post got ${recentHighPerformer.like_count} likes - ${Math.round(((recentHighPerformer.like_count || 0) / avgLikes) * 100)}% above your average!`,
+            time: timeAgo < 24 ? `${timeAgo}h ago` : '1d ago',
+            bg: 'bg-green-50',
+            icon: 'bg-green-500',
+            priority: 'high'
+          });
+        }
+      }
+      
+      // 3. GROWTH MILESTONE ALERTS (only with real data)
+      if (realGrowthData.canCalculateWeekly) {
+        notifications.push({
+          type: 'Growth Update',
+          message: `Weekly growth rate now available: ${realGrowthData.weeklyGrowthRate}! Based on your actual follower data.`,
+          time: '2h ago',
+          bg: 'bg-emerald-50',
+          icon: 'bg-emerald-500',
+          priority: 'medium'
+        });
+      }
+      
+      // 4. DATA AVAILABILITY UPDATES
+      if (realGrowthData.daysOfData > 0 && realGrowthData.daysOfData < 7) {
+        notifications.push({
+          type: 'Data Collection',
+          message: `${realGrowthData.daysOfData} days of data collected. Weekly growth rates available in ${realGrowthData.daysUntilWeekly} more days.`,
+          time: '4h ago',
+          bg: 'bg-blue-50',
+          icon: 'bg-blue-500',
+          priority: 'low'
+        });
+      }
+      
+      // 5. TOP FOLLOWERS INSIGHTS (only with real data)
       if (topFollowers.length > 0) {
         const superFans = topFollowers.filter(f => f.engagementType === 'high').length;
         if (superFans > 0) {
           notifications.push({
             type: 'Community Insight',
-            message: `You have ${superFans} super fans who consistently engage with your content over the past 6+ months!`,
-            time: '2h ago',
-            bg: 'bg-purple-50',
-            icon: 'bg-purple-500'
-          })
+            message: `You have ${superFans} highly engaged followers who regularly comment on your posts!`,
+            time: '6h ago',
+            bg: 'bg-violet-50',
+            icon: 'bg-violet-500',
+            priority: 'medium'
+          });
         }
       }
       
-      // Check for high-performing recent posts using enhanced metrics
-      if (postsWithInsights.length > 0) {
-        const avgPostReach = totalReach / postsWithInsights.length
-        const recentHighPerformer = postsWithInsights.find(post => {
-          return post.insights.reach > avgPostReach * 1.2 || post.insights.profile_visits > 5
-        })
-        
-        if (recentHighPerformer) {
-          const metric = recentHighPerformer.insights.reach > avgPostReach * 1.2 ? 
-            `reached ${recentHighPerformer.insights.reach.toLocaleString()} people` :
-            `drove ${recentHighPerformer.insights.profile_visits} profile visits`
-          
-          notifications.push({
-            type: 'Engagement Alert',
-            message: `Your latest post ${metric} - above average performance!`,
-            time: '1h ago',
-            bg: 'bg-green-50',
-            icon: 'bg-green-500'
-          })
-        }
-      }
-      
-      // Enhanced content type recommendation
-      if (contentAnalysis && contentAnalysis.length > 0) {
-        const bestType = contentAnalysis.reduce((best, current) => 
-          (current.avgReach + current.avgProfileVisits) > (best.avgReach + best.avgProfileVisits) ? current : best
-        )
-        
-        if (bestType.avgReach > 0 || bestType.avgProfileVisits > 0) {
-          const typeNames: { [key: string]: string } = {
-            'VIDEO': 'Reels',
-            'CAROUSEL_ALBUM': 'Carousels',
-            'IMAGE': 'Photos'
-          }
-          
-          notifications.push({
-            type: 'Content Insight',
-            message: `${typeNames[bestType.type] || bestType.type} perform best - ${bestType.avgReach} avg reach, ${bestType.avgProfileVisits} profile visits`,
-            time: '3h ago',
-            bg: 'bg-orange-50',
-            icon: 'bg-orange-500'
-          })
-        }
-      }
-      
-      // Extended weekly summary with 6+ months context
-      const weeklyFollowerGain = Math.round(currentFollowers * (estimatedWeeklyGrowth / 100))
-      const weeklyProfileVisits = calculatedAccountInsights?.profile_visits || 0
-      
-      notifications.push({
-        type: 'Extended Summary',
-        message: `6+ months analysis: ${postsWithInsights.length} posts, ${topFollowers.length} active followers, ${engagementRate} avg engagement`,
-        time: '1d ago',
-        bg: 'bg-indigo-50',
-        icon: 'bg-indigo-500'
-      })
-      
-      return notifications
+      return notifications.sort((a, b) => {
+        const priorityOrder: { [key: string]: number } = { high: 3, medium: 2, low: 1 };
+        return priorityOrder[b.priority || 'low'] - priorityOrder[a.priority || 'low'];
+      });
+    };
+
+    // Capture daily snapshot after calculating all metrics
+    if (instagramAccount?.id && postsWithInsights.length > 0) {
+      await captureDailySnapshot(supabase, instagramAccount.id, {
+        followers: profileData.followers_count || 0,
+        mediaCount: profileData.media_count || 0,
+        username: profileData.username || instagramAccount.username,
+        engagementRate,
+        avgLikes,
+        avgComments,
+        totalReach,
+        totalImpressions: totalViews,
+        accountInsights: calculatedAccountInsights,
+        topFollowers,
+        timingAnalysis,
+        contentAnalysis
+      }, postsWithInsights)
     }
 
     const result = {
-      // Basic metrics
-      followers: currentFollowers,
+      // Basic metrics (always available)
+      followers: profileData.followers_count || 0,
       mediaCount: profileData.media_count || 0,
       username: profileData.username || instagramAccount.username,
       engagementRate,
-      growthRate,
-      monthlyGrowth,
-      monthlyReach: monthlyReach.toLocaleString(),
+      
+      // CONSERVATIVE: Growth rates (only when we have real data)
+      growthRate: realGrowthData.weeklyGrowthRate, // null if not enough data
+      monthlyGrowth: realGrowthData.monthlyGrowthRate, // null if not enough data
+      
+      // Growth data context for UI
+      growthData: {
+        canCalculateWeekly: realGrowthData.canCalculateWeekly,
+        canCalculateMonthly: realGrowthData.canCalculateMonthly,
+        daysOfData: realGrowthData.daysOfData,
+        dataAvailableSince: realGrowthData.dataAvailableSince,
+        daysUntilWeekly: realGrowthData.daysUntilWeekly,
+        daysUntilMonthly: realGrowthData.daysUntilMonthly
+      },
+      
       avgLikes,
       avgComments,
       
-      // Enhanced reach metrics
+      // Enhanced reach metrics (only real data)
       totalReach,
       totalImpressions: totalViews,
       avgReach: postsWithInsights.length > 0 ? Math.round(totalReach / postsWithInsights.length) : 0,
       avgImpressions: postsWithInsights.length > 0 ? Math.round(totalViews / postsWithInsights.length) : 0,
       
-      // Enhanced account insights from post aggregation
-      accountInsights: calculatedAccountInsights && (calculatedAccountInsights.profile_visits > 0 || calculatedAccountInsights.impressions > 0) ? calculatedAccountInsights : null,
+      // Enhanced account insights from post aggregation (only if we have data)
+      accountInsights: calculatedAccountInsights && 
+        (calculatedAccountInsights.reach > 0 || 
+         calculatedAccountInsights.profile_visits > 0 || 
+         calculatedAccountInsights.impressions > 0) 
+        ? calculatedAccountInsights 
+        : null,
       
-      // EXTENDED: Real top followers from 6+ months of comment analysis
+      // NEW: Historical data for charts
+      historicalData,
+      
+      // EXTENDED: Real top followers from comment analysis
       topFollowers,
       
       // Enhanced post data with all insights (limited to most recent 20 for performance)
@@ -880,51 +1201,53 @@ export async function GET(request: NextRequest) {
       timingAnalysis,
       contentAnalysis,
       
-      // Dynamic notifications with enhanced data
-      notifications: generateNotifications(),
+      // Dynamic notifications with real data only
+      notifications: generateRealNotifications(),
       
-      // EXTENDED: Enhanced insights with 6+ months context
+      // CONSERVATIVE: Insights with real data context
       insights: {
-        bestPostingTime: timingAnalysis ? 
-          `${timingAnalysis.peakHours[0] || 19}-${timingAnalysis.peakHours[timingAnalysis.peakHours.length - 1] || 21}:00` : 
-          '7-9 PM',
+        bestPostingTime: timingAnalysis && timingAnalysis.peakHours.length > 0 ? 
+          `${timingAnalysis.peakHours[0]}-${timingAnalysis.peakHours[timingAnalysis.peakHours.length - 1]}:00` : 
+          null, // null instead of estimated time
         topContentType: contentAnalysis && contentAnalysis.length > 0 ? 
           contentAnalysis.reduce((best, current) => (current.avgReach + current.avgProfileVisits) > (best.avgReach + best.avgProfileVisits) ? current : best).type :
-          'IMAGE',
-        engagementTrend: totalEngagement > (avgLikes + avgComments) * postsWithInsights.length ? 'increasing' : 'stable',
-        reachTrend: totalReach > 0 ? 'real_data' : 'estimated',
+          null, // null instead of estimated type
+        engagementTrend: totalEngagement > 0 && avgLikes > 0 ? 
+          (totalEngagement > (avgLikes + avgComments) * postsWithInsights.length ? 'increasing' : 'stable') : 
+          null, // null if no data
+        reachTrend: totalReach > 0 ? 'real_data' : 'no_data', // honest about data availability
         hasRealInsights: (calculatedAccountInsights?.profile_visits || 0) > 0 || totalViews > 0,
-        apiType: 'instagram_api_extended_6plus_months',
+        apiType: 'instagram_api_enhanced_with_historical_data',
         dataTimespan: postsWithInsights.length > 0 ? `${formatDate(postsWithInsights[postsWithInsights.length - 1].timestamp)} to ${formatDate(postsWithInsights[0].timestamp)}` : 'No data',
-        totalPostsAnalyzed: postsWithInsights.length
+        totalPostsAnalyzed: postsWithInsights.length,
+        connectionDate: instagramAccount.created_at ? new Date(instagramAccount.created_at).toLocaleDateString('en-US', { 
+          month: 'long', 
+          year: 'numeric' 
+        }) : null
       }
     }
 
-    console.log('📊 Returning EXTENDED metrics with Instagram API:', {
+    console.log('📊 Returning ENHANCED metrics with historical data:', {
       followers: result.followers,
       mediaCount: result.mediaCount,
       engagementRate: result.engagementRate,
+      weeklyGrowthAvailable: result.growthData.canCalculateWeekly,
+      monthlyGrowthAvailable: result.growthData.canCalculateMonthly,
+      daysOfData: result.growthData.daysOfData,
       postsCount: result.recentPosts.length,
       totalPostsAnalyzed: postsWithInsights.length,
-      totalReach: result.totalReach,
-      totalViews: totalViews,
-      totalProfileVisits: calculatedAccountInsights?.profile_visits || 0,
-      totalComments: postsWithInsights.reduce((sum, post) => sum + (post.comments?.length || 0), 0),
+      hasRealReachData: result.totalReach > 0,
       topFollowersCount: topFollowers.length,
-      extendedTimeRange: '6+ months',
-      hasEnhancedInsights: result.insights.hasRealInsights,
-      hasTimingData: !!result.timingAnalysis,
-      hasContentAnalysis: !!result.contentAnalysis,
-      notificationsCount: result.notifications.length,
+      hasHistoricalData: historicalData.weekly.length > 0 || historicalData.monthly.length > 0,
       apiType: result.insights.apiType
     })
 
     return NextResponse.json(result)
 
   } catch (error) {
-    console.error('❌ Extended Instagram metrics error:', error)
+    console.error('❌ Enhanced Instagram metrics error:', error)
     return NextResponse.json({ 
-      error: 'Failed to fetch extended metrics',
+      error: 'Failed to fetch metrics',
       details: typeof error === 'object' && error !== null && 'message' in error ? (error as { message: string }).message : String(error)
     }, { status: 500 })
   }
