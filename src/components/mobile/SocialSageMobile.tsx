@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Home, BarChart3, Bell, User, Plus, TrendingUp, Users, Heart, MessageCircle, Share, MoreHorizontal } from 'lucide-react';
+import { AuthService } from '@/lib/auth'
 
 // Type definitions
 interface Metric {
@@ -3423,12 +3424,18 @@ const SocialSageMobile = () => {
     const handleInstagramAuth = async () => {
       if (instagramData) {
         // Disconnect Instagram
-        if (isDisconnectingInstagram) return; // Prevent double clicks
+        if (isDisconnectingInstagram) return;
         
         setIsDisconnectingInstagram(true);
         try {
-          // Simulate disconnect
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // ✅ FIXED: Get current user ID instead of using instagramData.user_id
+          const user = await AuthService.getCurrentUser();
+          if (!user) {
+            alert('Please log in first');
+            return;
+          }
+          
+          await AuthService.disconnectInstagramAccount(user.id);
           setInstagramData(null);
           alert('Instagram account disconnected successfully!');
         } catch (error) {
@@ -3440,8 +3447,17 @@ const SocialSageMobile = () => {
       } else {
         // Connect Instagram
         try {
-          // Simulate connect
-          alert('In a real app, this would redirect to Instagram OAuth!');
+          // ✅ FIXED: Actually start the OAuth flow
+          const user = await AuthService.getCurrentUser();
+          if (!user) {
+            alert('Please log in first');
+            return;
+          }
+          
+          // Get the Instagram auth URL and redirect
+          const authUrl = AuthService.getInstagramAuthUrl(user.id);
+          window.location.href = authUrl;
+          
         } catch (error) {
           console.error('❌ Failed to start Instagram connection:', error);
           alert('Failed to connect Instagram. Please try again.');

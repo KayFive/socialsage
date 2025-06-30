@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
       }
     )
 
-    // ✅ ADD THIS: Authenticate the user
+    // Authenticate the user
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     
     if (userError || !user) {
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing userId or accountData' }, { status: 400 })
     }
 
-    // ✅ ADD THIS: Verify user matches
+    // Verify user matches
     if (user.id !== userId) {
       console.error('❌ User ID mismatch:', user.id, 'vs', userId)
       return NextResponse.json(
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
 
     // Prepare the account data - ONLY using fields that exist in your schema
     type InstagramAccountData = {
-      user_id: string  // ✅ CHANGED: Use authenticated user ID
+      user_id: string
       instagram_id: any
       instagram_handle: any
       username: any
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
     }
 
     const instagramAccountData: InstagramAccountData = {
-      user_id: user.id, // ✅ CHANGED: Use authenticated user ID instead of passed userId
+      user_id: user.id,
       instagram_id: accountData.user_id || accountData.id,
       instagram_handle: accountData.username || 'unknown',
       username: accountData.username || 'unknown',
@@ -108,22 +108,62 @@ export async function POST(request: NextRequest) {
       accountType: instagramAccountData.account_type
     })
 
-    // Insert the new account (now with proper auth context)
-    const { data: savedAccount, error: insertError } = await supabase
+    // ✅ FIXED: Check for existing record first to preserve historical data
+    const { data: existingAccount } = await supabase
       .from('instagram_accounts')
-      .insert(instagramAccountData)
-      .select()
-      .single()
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('instagram_id', instagramAccountData.instagram_id)
+      .maybeSingle()
 
-    if (insertError) {
-      console.error('❌ Error saving Instagram account:', insertError)
-      return NextResponse.json({ 
-        error: 'Failed to save Instagram account',
-        details: insertError.message 
-      }, { status: 500 })
+    let savedAccount;
+
+    if (existingAccount) {
+      // ✅ Reactivate existing account (preserves historical data)
+      console.log('📊 Reactivating existing Instagram account with historical data')
+      const { data, error: updateError } = await supabase
+        .from('instagram_accounts')
+        .update({
+          access_token: instagramAccountData.access_token,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+          token_expires_at: instagramAccountData.token_expires_at
+        })
+        .eq('id', existingAccount.id)
+        .select()
+        .single()
+
+      if (updateError) {
+        console.error('❌ Error reactivating Instagram account:', updateError)
+        return NextResponse.json({ 
+          error: 'Failed to reactivate Instagram account',
+          details: updateError.message 
+        }, { status: 500 })
+      }
+
+      savedAccount = data
+      console.log('✅ Instagram account reactivated with historical data preserved')
+
+    } else {
+      // ✅ Create new account (first time connecting this Instagram account)
+      console.log('📊 Creating new Instagram account record')
+      const { data, error: insertError } = await supabase
+        .from('instagram_accounts')
+        .insert(instagramAccountData)
+        .select()
+        .single()
+
+      if (insertError) {
+        console.error('❌ Error creating Instagram account:', insertError)
+        return NextResponse.json({ 
+          error: 'Failed to save Instagram account',
+          details: insertError.message 
+        }, { status: 500 })
+      }
+
+      savedAccount = data
+      console.log('✅ New Instagram account created')
     }
-
-    console.log('✅ Instagram account saved successfully:', savedAccount.id)
 
     return NextResponse.json({
       success: true,
