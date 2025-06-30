@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 import { Home, BarChart3, Bell, User, Plus, TrendingUp, Users, Heart, MessageCircle, Share, MoreHorizontal } from 'lucide-react';
 
 // Type definitions
@@ -213,6 +215,7 @@ type Performance = 'high' | 'medium' | 'low';
 type Status = 'excellent' | 'strong' | 'opportunity' | 'normal';
 
 const SocialSageMobile = () => {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState('dashboard');
   const [timeFrame, setTimeFrame] = useState<TimeFrame>('weekly');
   const [selectedMetricCategory, setSelectedMetricCategory] = useState<string | null>(null);
@@ -221,6 +224,32 @@ const SocialSageMobile = () => {
   const [instagramData, setInstagramData] = useState<InstagramData | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
+
+  // Logout function
+  const handleLogout = async () => {
+    console.log('🚪 Logging out from dashboard...')
+    
+    try {
+      sessionStorage.removeItem('socialsage_user_id')
+      sessionStorage.removeItem('socialsage_user_email')
+      localStorage.clear()
+      
+      const { error } = await supabase.auth.signOut()
+      
+      if (error) {
+        console.error('❌ Logout error:', error)
+      } else {
+        console.log('✅ Logged out successfully')
+      }
+      
+      router.push('/')
+      router.refresh()
+      
+    } catch (error) {
+      console.error('❌ Error during logout:', error)
+      router.push('/')
+    }
+  }
 
   // Fetch real Instagram data
   useEffect(() => {
@@ -761,7 +790,7 @@ const SocialSageMobile = () => {
       const contentTypes = getContentTypeData();
 
       return (
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-teal-50 to-cyan-50">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-teal-50 to-cyan-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-teal-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <button 
               onClick={() => setSelectedMetricCategory(null)}
@@ -900,7 +929,7 @@ const SocialSageMobile = () => {
       const hours = Array.from({ length: 24 }, (_, i) => i);
 
       return (
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-purple-50 to-pink-50">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-purple-50 to-pink-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-purple-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <button 
               onClick={() => setSelectedMetricCategory(null)}
@@ -1082,7 +1111,7 @@ const SocialSageMobile = () => {
       const frequencyData = instagramData?.recentPosts ? calculateFrequencyOptimization(instagramData.recentPosts) : null;
 
       return (
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-orange-50 to-red-50">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-orange-50 to-red-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-orange-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <button 
               onClick={() => setSelectedMetricCategory(null)}
@@ -1243,7 +1272,7 @@ const SocialSageMobile = () => {
       };
 
       return (
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-violet-50 to-purple-50">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-violet-50 to-purple-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-violet-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <button 
               onClick={() => setSelectedMetricCategory(null)}
@@ -1461,7 +1490,7 @@ const SocialSageMobile = () => {
       const maxFollowers = Math.max(...chartData.map(d => d.followers));
 
       return (
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-emerald-50 to-teal-50">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-emerald-50 to-teal-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-emerald-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <button 
               onClick={() => setSelectedMetricCategory(null)}
@@ -1807,7 +1836,7 @@ const SocialSageMobile = () => {
       const maxEngagementRate = Math.max(...engagementHistory.map(d => d.engagementRate));
 
       return (
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-blue-50 to-purple-50">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-blue-50 to-purple-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-blue-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <button 
               onClick={() => setSelectedMetricCategory(null)}
@@ -1995,7 +2024,7 @@ const SocialSageMobile = () => {
 
     // Default generic metric detail view for other categories
     return (
-      <div className="flex-1 overflow-y-auto bg-gray-50">
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center sticky top-0 z-10">
           <button 
             onClick={() => setSelectedMetricCategory(null)}
@@ -2159,12 +2188,12 @@ const SocialSageMobile = () => {
     }
     
     return (
-      <div className="flex-1 overflow-y-auto bg-gradient-to-b from-gray-50 to-blue-50/30">
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-gray-50 to-blue-50/30">
         <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200/50 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
           <h1 className="text-xl font-bold text-gray-900">SocialSage</h1>
           <div className="flex items-center space-x-2">
             <button 
-              onClick={() => alert('Logout functionality would go here')} 
+              onClick={handleLogout}
               className="text-sm text-red-600 hover:text-red-700 px-2 py-1 rounded"
             >
               Logout
@@ -2428,7 +2457,7 @@ const SocialSageMobile = () => {
     };
 
     return (
-      <div className="flex-1 overflow-y-auto bg-gray-50">
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
           <h1 className="text-xl font-bold text-gray-900 mb-3">Posts</h1>
           
@@ -2599,21 +2628,25 @@ const SocialSageMobile = () => {
                           <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
                           <div className="text-xs text-gray-600">Likes</div>
                         </div>
+                        
                         <div className="bg-white/70 rounded-lg p-3">
                           <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
                           <div className="text-xs text-gray-600">Comments</div>
                         </div>
+                        
                         <div className="bg-white/70 rounded-lg p-3">
                           <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
                           <div className="text-xs text-gray-600">Shares</div>
                         </div>
+                        
                         <div className="bg-white/70 rounded-lg p-3">
                           <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
                           <div className="text-xs text-gray-600">Reach</div>
                         </div>
+                        
                         <div className="bg-white/70 rounded-lg p-3">
                           <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
                           <div className="text-sm font-bold text-gray-900">
@@ -2895,7 +2928,7 @@ const SocialSageMobile = () => {
     };
 
     return (
-      <div className="flex-1 overflow-y-auto bg-gradient-to-b from-indigo-50 to-purple-50">
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-indigo-50 to-purple-50">
         <div className="bg-white/95 backdrop-blur-sm border-b border-indigo-200/50 px-4 py-3 sticky top-0 z-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -3335,7 +3368,7 @@ const SocialSageMobile = () => {
     const notifications = generateRealNotifications();
 
     return (
-      <div className="flex-1 overflow-y-auto bg-gray-50">
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold text-gray-900">Notifications</h1>
@@ -3610,7 +3643,7 @@ const SocialSageMobile = () => {
     );
 
     return (
-      <div className="flex-1 overflow-y-auto bg-gray-50">
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
           <h1 className="text-xl font-bold text-gray-900">Profile</h1>
         </div>
@@ -3783,16 +3816,11 @@ const SocialSageMobile = () => {
   };
 
   return (
-    <div className="max-w-sm mx-auto bg-white shadow-2xl rounded-3xl overflow-hidden h-screen flex flex-col">
-      <div className="bg-black text-white text-xs px-4 py-1 flex justify-between items-center">
-        <span>9:41</span>
-        <span>SocialSage</span>
-        <span>100%</span>
-      </div>
+    <div className="w-full min-h-screen bg-white">
 
       {renderContent()}
 
-      <div className="bg-white border-t border-gray-200 px-2 py-2 flex justify-around items-center safe-area-pb">
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 flex justify-around items-center z-50 safe-area-bottom">
         {[
           { id: 'dashboard', icon: Home, label: 'Dashboard' },
           { id: 'posts', icon: BarChart3, label: 'Posts' },

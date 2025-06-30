@@ -249,13 +249,7 @@ export default function HomePage() {
   if (isLoading) {
     console.log('⏳ Showing loading state')
     return (
-      <div className="max-w-sm mx-auto bg-white shadow-2xl rounded-3xl overflow-hidden h-screen flex flex-col">
-        <div className="bg-black text-white text-xs px-4 py-1 flex justify-between items-center">
-          <span>9:41</span>
-          <span className="font-semibold">SocialSage</span>
-          <span>100%</span>
-        </div>
-        
+      <div className="w-full min-h-screen bg-white flex flex-col">
         <div className="flex-1 flex items-center justify-center">
           <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full"></div>
         </div>
@@ -267,13 +261,7 @@ export default function HomePage() {
   if (!user) {
     console.log('🔐 Showing login page - no user')
     return (
-      <div className="max-w-sm mx-auto bg-white shadow-2xl rounded-3xl overflow-hidden h-screen flex flex-col">
-        <div className="bg-black text-white text-xs px-4 py-1 flex justify-between items-center">
-          <span>9:41</span>
-          <span className="font-semibold">SocialSage</span>
-          <span>100%</span>
-        </div>
-        
+      <div className="w-full min-h-screen bg-white flex flex-col">
         <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-gray-900 mb-2">SocialSage</h1>
@@ -360,16 +348,10 @@ export default function HomePage() {
   if (!instagramAccount) {
     console.log('📸 Showing Instagram connect page - user exists but no Instagram')
     return (
-      <div className="max-w-sm mx-auto bg-white shadow-2xl rounded-3xl overflow-hidden h-screen flex flex-col">
-        <div className="bg-black text-white text-xs px-4 py-1 flex justify-between items-center">
-          <span>9:41</span>
-          <span className="font-semibold">SocialSage</span>
-          <span>100%</span>
-        </div>
-        
+      <div className="w-full min-h-screen bg-white flex flex-col">
         <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
           {/* Logout button */}
-          <div className="absolute top-16 right-4">
+          <div className="absolute top-4 right-4">
             <button
               onClick={handleLogout}
               className="bg-red-500 text-white px-3 py-1 rounded-lg text-xs"

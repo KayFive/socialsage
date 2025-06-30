@@ -26,11 +26,33 @@ export async function POST(request: NextRequest) {
       }
     )
 
+    // ✅ ADD THIS: Authenticate the user
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    
+    if (userError || !user) {
+      console.error('❌ User not authenticated:', userError)
+      return NextResponse.json(
+        { error: 'User not authenticated' },
+        { status: 401 }
+      )
+    }
+
+    console.log('✅ Authenticated user:', user.id)
+
     const { userId, accountData } = await request.json()
 
     if (!userId || !accountData) {
       console.error('❌ Missing required data:', { userId: !!userId, accountData: !!accountData })
       return NextResponse.json({ error: 'Missing userId or accountData' }, { status: 400 })
+    }
+
+    // ✅ ADD THIS: Verify user matches
+    if (user.id !== userId) {
+      console.error('❌ User ID mismatch:', user.id, 'vs', userId)
+      return NextResponse.json(
+        { error: 'Unauthorized: User ID mismatch' },
+        { status: 403 }
+      )
     }
 
     console.log('📊 Processing account data for user:', userId)
@@ -48,7 +70,7 @@ export async function POST(request: NextRequest) {
 
     // Prepare the account data - ONLY using fields that exist in your schema
     type InstagramAccountData = {
-      user_id: any
+      user_id: string  // ✅ CHANGED: Use authenticated user ID
       instagram_id: any
       instagram_handle: any
       username: any
@@ -61,18 +83,18 @@ export async function POST(request: NextRequest) {
     }
 
     const instagramAccountData: InstagramAccountData = {
-      user_id: userId,
+      user_id: user.id, // ✅ CHANGED: Use authenticated user ID instead of passed userId
       instagram_id: accountData.user_id || accountData.id,
-      instagram_handle: accountData.username || 'unknown', // Using instagram_handle from your schema
-      username: accountData.username || 'unknown',         // Using username from your schema
+      instagram_handle: accountData.username || 'unknown',
+      username: accountData.username || 'unknown',
       access_token: accountData.access_token,
       is_active: true,
-      account_type: accountData.account_type || 'BUSINESS', // This field exists in your schema
+      account_type: accountData.account_type || 'BUSINESS',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }
 
-    // Only add token_expires_at if we have expiration data (this field exists in your schema)
+    // Only add token_expires_at if we have expiration data
     if (accountData.expires_in) {
       instagramAccountData.token_expires_at = new Date(Date.now() + accountData.expires_in * 1000).toISOString()
     }
@@ -86,7 +108,7 @@ export async function POST(request: NextRequest) {
       accountType: instagramAccountData.account_type
     })
 
-    // Insert the new account
+    // Insert the new account (now with proper auth context)
     const { data: savedAccount, error: insertError } = await supabase
       .from('instagram_accounts')
       .insert(instagramAccountData)
