@@ -751,9 +751,110 @@ async function fetchHistoricalData(
   }
 }
 
+// 🔥 NEW: Function to find the Instagram account with the most historical data
+async function findPrimaryInstagramAccount(supabase: any, userId: string) {
+  console.log('🔍 Finding primary Instagram account with most historical data...')
+
+  // Get all Instagram accounts for this user (active and inactive)
+  const { data: allAccounts, error: accountsError } = await supabase
+    .from('instagram_accounts')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true }) // Oldest first
+
+  if (accountsError || !allAccounts || allAccounts.length === 0) {
+    console.log('❌ No Instagram accounts found for user')
+    return { account: null, error: 'No Instagram account found' }
+  }
+
+  console.log(`📊 Found ${allAccounts.length} Instagram accounts for user`)
+
+  if (allAccounts.length === 1) {
+    // Only one account, make sure it's active
+    const account = allAccounts[0]
+    await supabase
+      .from('instagram_accounts')
+      .update({ is_active: true })
+      .eq('id', account.id)
+    
+    console.log(`✅ Using single account: ${account.username}`)
+    return { account, error: null }
+  }
+
+  // Multiple accounts - find the one with the most historical data
+  console.log('🔄 Multiple accounts found, determining primary based on historical data...')
+
+  const accountDataCounts = await Promise.all(
+    allAccounts.map(async (account: any) => {
+      const { count } = await supabase
+        .from('daily_snapshots')
+        .select('*', { count: 'exact', head: true })
+        .eq('instagram_account_id', account.id)
+      
+      return { 
+        account, 
+        dataCount: count || 0,
+        createdAt: new Date(account.created_at).getTime()
+      }
+    })
+  )
+
+  // Sort by data count (most data first), then by creation date (oldest first)
+  accountDataCounts.sort((a, b) => {
+    if (b.dataCount !== a.dataCount) {
+      return b.dataCount - a.dataCount
+    }
+    return a.createdAt - b.createdAt
+  })
+
+  const primaryAccountData = accountDataCounts[0]
+  const primaryAccount = primaryAccountData.account
+  const duplicateAccounts = accountDataCounts.slice(1)
+
+  console.log(`📊 Primary account: ${primaryAccount.username} (${primaryAccountData.dataCount} data points, created ${new Date(primaryAccount.created_at).toLocaleDateString()})`)
+  console.log(`🗑️ Other accounts: ${duplicateAccounts.map(acc => `${acc.account.username} (${acc.dataCount} points)`).join(', ')}`)
+
+  // Migrate data from duplicate accounts to primary account if needed
+  for (const duplicateData of duplicateAccounts) {
+    if (duplicateData.dataCount > 0) {
+      console.log(`🔄 Migrating ${duplicateData.dataCount} snapshots from ${duplicateData.account.username} to ${primaryAccount.username}`)
+      
+      // Update snapshots to point to primary account
+      const { error: migrateError } = await supabase
+        .from('daily_snapshots')
+        .update({ instagram_account_id: primaryAccount.id })
+        .eq('instagram_account_id', duplicateData.account.id)
+
+      if (migrateError) {
+        console.error(`❌ Error migrating snapshots:`, migrateError)
+      } else {
+        console.log(`✅ Migrated ${duplicateData.dataCount} snapshots successfully`)
+      }
+    }
+  }
+
+  // Mark primary account as active, others as inactive
+  await supabase
+    .from('instagram_accounts')
+    .update({ is_active: true, updated_at: new Date().toISOString() })
+    .eq('id', primaryAccount.id)
+
+  const duplicateIds = duplicateAccounts.map(acc => acc.account.id)
+  if (duplicateIds.length > 0) {
+    await supabase
+      .from('instagram_accounts')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .in('id', duplicateIds)
+  }
+
+  console.log(`✅ Primary account ${primaryAccount.username} activated, ${duplicateIds.length} duplicates deactivated`)
+
+  return { account: primaryAccount, error: null }
+}
+
 export async function GET(request: NextRequest) {
   try {
-    console.log('📊 Instagram metrics API called (ENHANCED VERSION WITH HISTORICAL DATA)')
+    console.log('📊 Instagram metrics API called (ENHANCED VERSION WITH DUPLICATE ACCOUNT FIX)')
     
     // Modern Supabase SSR approach - Next.js 15 compatible
     const cookieStore = await cookies()
@@ -788,20 +889,15 @@ export async function GET(request: NextRequest) {
 
     console.log('✅ Authenticated user:', user.id)
 
-    // Get Instagram account
-    const { data: instagramAccount, error: igError } = await supabase
-      .from('instagram_accounts')
-      .select('id, access_token, instagram_id, username, created_at')
-      .eq('user_id', user.id)
-      .eq('is_active', true)
-      .single()
+    // 🔥 NEW: Find the primary Instagram account with the most historical data
+    const { account: instagramAccount, error: igError } = await findPrimaryInstagramAccount(supabase, user.id)
 
     if (igError || !instagramAccount) {
-      console.log('❌ No Instagram account found:', igError?.message || 'Account not found')
+      console.log('❌ No Instagram account found:', igError)
       return NextResponse.json({ error: 'Instagram not connected' }, { status: 404 })
     }
 
-    console.log('📸 Found Instagram account:', instagramAccount.username)
+    console.log('📸 Using primary Instagram account:', instagramAccount.username, `(ID: ${instagramAccount.id})`)
 
     // Test basic API access first
     console.log('🧪 Testing basic API access...')
@@ -1217,17 +1313,24 @@ export async function GET(request: NextRequest) {
           null, // null if no data
         reachTrend: totalReach > 0 ? 'real_data' : 'no_data', // honest about data availability
         hasRealInsights: (calculatedAccountInsights?.profile_visits || 0) > 0 || totalViews > 0,
-        apiType: 'instagram_api_enhanced_with_historical_data',
+        apiType: 'instagram_api_enhanced_with_historical_data_and_duplicate_fix',
         dataTimespan: postsWithInsights.length > 0 ? `${formatDate(postsWithInsights[postsWithInsights.length - 1].timestamp)} to ${formatDate(postsWithInsights[0].timestamp)}` : 'No data',
         totalPostsAnalyzed: postsWithInsights.length,
         connectionDate: instagramAccount.created_at ? new Date(instagramAccount.created_at).toLocaleDateString('en-US', { 
           month: 'long', 
           year: 'numeric' 
-        }) : null
+        }) : null,
+        // 🔥 NEW: Show which account is being used
+        primaryAccountId: instagramAccount.id,
+        accountCreated: new Date(instagramAccount.created_at).toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric',
+          year: 'numeric' 
+        })
       }
     }
 
-    console.log('📊 Returning ENHANCED metrics with historical data:', {
+    console.log('📊 Returning ENHANCED metrics with duplicate account fix:', {
       followers: result.followers,
       mediaCount: result.mediaCount,
       engagementRate: result.engagementRate,
@@ -1239,6 +1342,8 @@ export async function GET(request: NextRequest) {
       hasRealReachData: result.totalReach > 0,
       topFollowersCount: topFollowers.length,
       hasHistoricalData: historicalData.weekly.length > 0 || historicalData.monthly.length > 0,
+      primaryAccountUsed: instagramAccount.id,
+      dataCollectionStarted: result.insights.dataTimespan,
       apiType: result.insights.apiType
     })
 
