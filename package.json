@@ -9,8 +9,8 @@
     "lint": "next lint",
     "db:generate": "supabase gen types typescript --project-id xgvtcfskwbmcfytxblbj > src/types/supabase.ts",
     "db:migrate": "supabase db push",
-    "sync:daily": "curl -X POST http://localhost:3000/api/sync/daily -H 'Authorization: Bearer your_cron_secret_key'",
-    "sync:tokens": "curl -X POST http://localhost:3000/api/sync/token-refresh -H 'Authorization: Bearer your_cron_secret_key'"
+    "sync:daily": "curl -X POST http://localhost:3000/api/sync/daily -H 'Authorization: Bearer $CRON_SECRET_KEY'",
+    "sync:tokens": "curl -X POST http://localhost:3000/api/sync/token-refresh -H 'Authorization: Bearer $CRON_SECRET_KEY'"
   },
   "dependencies": {
     "@supabase/auth-ui-react": "^0.4.7",
