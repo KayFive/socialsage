@@ -1,4 +1,4 @@
-// src/lib/auth.ts - Updated with modern Supabase SSR
+// src/lib/auth.ts - Updated with environment-aware Instagram OAuth
 import { createBrowserClient } from '@supabase/ssr'
 import { InstagramAccount } from '@/types/instagram'
 
@@ -9,49 +9,128 @@ const supabase = createBrowserClient(
 )
 
 export class AuthService {
-  static getInstagramAuthUrl(userId?: string): string {
-    // Get environment variables with proper fallbacks
-    const clientId = process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID
-    // TEMPORARY: Hardcode ngrok URL for testing
-    const redirectUri = 'https://b595-2600-1700-ab90-6580-a569-6a8f-59ba-37ad.ngrok-free.app/auth/instagram/callback'
-    
-    console.log('🔧 Instagram Auth Config:')
-    console.log('- Client ID:', clientId || 'MISSING')
-    console.log('- Redirect URI:', redirectUri)
-    console.log('- User ID for state:', userId || 'none')
-    
-    if (!clientId) {
-      console.error('❌ NEXT_PUBLIC_INSTAGRAM_CLIENT_ID is not set!')
-      throw new Error('Instagram Client ID not configured')
+  // Helper method to determine the correct base URL based on environment
+  static getBaseUrl(): string {
+    // Check if we're in browser environment
+    if (typeof window !== 'undefined') {
+      const currentOrigin = window.location.origin;
+      console.log('🌐 Client-side detected origin:', currentOrigin);
+      
+      // If we're on Vercel production, always use the production URL
+      if (currentOrigin.includes('vercel.app') || currentOrigin.includes('socialsage-app')) {
+        console.log('✅ Using Vercel production URL');
+        return 'https://socialsage-app.vercel.app';
+      }
+      
+      // If we're on ngrok, use ngrok URL  
+      if (currentOrigin.includes('ngrok')) {
+        console.log('🔧 Using ngrok development URL');
+        return currentOrigin;
+      }
+      
+      // If we're on localhost, check environment variable for ngrok URL
+      if (currentOrigin.includes('localhost')) {
+        const ngrokUrl = process.env.NEXT_PUBLIC_APP_URL;
+        if (ngrokUrl && ngrokUrl.includes('ngrok')) {
+          console.log('🔧 Using ngrok URL from env for localhost');
+          return ngrokUrl;
+        }
+      }
+      
+      // Fallback to current origin
+      return currentOrigin;
     }
     
-    // Using Instagram Business API (NEW - not deprecated)
-    const scope = 'instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments,instagram_business_content_publish'
+    // Server-side: use environment variables
+    const envAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+    const envRedirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI;
+    
+    console.log('🖥️ Server-side environment check:');
+    console.log('- APP_URL:', envAppUrl);
+    console.log('- REDIRECT_URI:', envRedirectUri);
+    
+    // Prefer APP_URL if set
+    if (envAppUrl) {
+      console.log('✅ Using APP_URL from environment');
+      return envAppUrl;
+    }
+    
+    // Extract base URL from redirect URI if available
+    if (envRedirectUri) {
+      const baseUrl = envRedirectUri.replace('/auth/instagram/callback', '');
+      console.log('✅ Extracted base URL from REDIRECT_URI');
+      return baseUrl;
+    }
+    
+    // Final fallback to production
+    console.log('⚠️ Using production fallback URL');
+    return 'https://socialsage-app.vercel.app';
+  }
+
+  static getInstagramAuthUrl(userId?: string): string {
+    // Get environment variables with proper fallbacks
+    const clientId = process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID;
+    
+    if (!clientId) {
+      console.error('❌ NEXT_PUBLIC_INSTAGRAM_CLIENT_ID is not set!');
+      throw new Error('Instagram Client ID not configured');
+    }
+    
+    // Get the correct base URL
+    const baseUrl = this.getBaseUrl();
+    const redirectUri = `${baseUrl}/auth/instagram/callback`;
+    
+    console.log('🔧 Instagram Auth Config:');
+    console.log('- Client ID:', clientId);
+    console.log('- Base URL:', baseUrl);
+    console.log('- Redirect URI:', redirectUri);
+    console.log('- User ID for state:', userId || 'none');
+    console.log('- Environment:', process.env.NODE_ENV);
+    
+    // Only request the scopes you actually need (based on our conversation)
+    const scope = 'instagram_business_basic,instagram_business_manage_comments';
+    
+    // Generate a unique state parameter
+    const timestamp = Date.now();
+    const randomId = crypto.randomUUID().substring(0, 8);
+    const state = userId ? `${timestamp}_${randomId}_USER_${userId}` : `${timestamp}_${randomId}`;
     
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       scope: scope,
       response_type: 'code',
-      state: userId ? `${crypto.randomUUID()}_USER_${userId}` : crypto.randomUUID()
-    })
+      state: state
+    });
+    
+    // Store auth initiation details for debugging
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('oauth_initiated_from', baseUrl);
+      sessionStorage.setItem('oauth_redirect_uri', redirectUri);
+      sessionStorage.setItem('oauth_timestamp', timestamp.toString());
+      if (userId) {
+        sessionStorage.setItem('oauth_user_id', userId);
+      }
+    }
     
     // Instagram Business API URL (NOT Basic Display API)
-    const authUrl = `https://www.instagram.com/oauth/authorize?${params.toString()}`
-    console.log('🔗 Generated Instagram Auth URL:', authUrl)
-    return authUrl
+    const authUrl = `https://www.instagram.com/oauth/authorize?${params.toString()}`;
+    console.log('🔗 Generated Instagram Auth URL:', authUrl);
+    console.log('🔗 Redirect will go to:', redirectUri);
+    
+    return authUrl;
   }
 
   static async getActiveInstagramAccount(userId: string): Promise<InstagramAccount | null> {
-    console.log('🔍 AuthService: Fetching Instagram account for user:', userId)
+    console.log('🔍 AuthService: Fetching Instagram account for user:', userId);
     
     if (!userId) {
-      console.error('❌ No user ID provided')
-      return null
+      console.error('❌ No user ID provided');
+      return null;
     }
     
     try {
-      console.log('📡 Making Supabase query...')
+      console.log('📡 Making Supabase query...');
       
       // Use maybeSingle() instead of single() to avoid errors when no records exist
       const { data, error } = await supabase
@@ -61,57 +140,57 @@ export class AuthService {
         .eq('is_active', true)
         .order('created_at', { ascending: false })
         .limit(1)
-        .maybeSingle() // This won't throw error if no records found
+        .maybeSingle(); // This won't throw error if no records found
 
-      console.log('📊 AuthService: Query result:')
-      console.log('- Data:', data)
-      console.log('- Error:', error)
+      console.log('📊 AuthService: Query result:');
+      console.log('- Data:', data);
+      console.log('- Error:', error);
 
       if (error) {
-        console.error('❌ AuthService: Database error:', error)
-        return null
+        console.error('❌ AuthService: Database error:', error);
+        return null;
       }
 
       if (data) {
-        console.log('✅ AuthService: Found Instagram account:', data.username)
-        return data as InstagramAccount
+        console.log('✅ AuthService: Found Instagram account:', data.username);
+        return data as InstagramAccount;
       }
 
-      console.log('📭 AuthService: No Instagram account found (normal for new users)')
-      return null
+      console.log('📭 AuthService: No Instagram account found (normal for new users)');
+      return null;
 
     } catch (error) {
-      console.error('❌ AuthService: Unexpected error:', error)
-      return null
+      console.error('❌ AuthService: Unexpected error:', error);
+      return null;
     }
   }
 
   static async getCurrentUser() {
-    console.log('👤 Getting current user...')
+    console.log('👤 Getting current user...');
     
     try {
-      const { data: { user }, error } = await supabase.auth.getUser()
+      const { data: { user }, error } = await supabase.auth.getUser();
       
       if (error) {
-        console.log('❌ AuthService: Error getting user:', error.message)
-        return null
+        console.log('❌ AuthService: Error getting user:', error.message);
+        return null;
       }
       
       if (user) {
-        console.log('✅ AuthService: Found user:', user.id)
-        return user
+        console.log('✅ AuthService: Found user:', user.id);
+        return user;
       }
       
-      console.log('📭 AuthService: No user found')
-      return null
+      console.log('📭 AuthService: No user found');
+      return null;
     } catch (error) {
-      console.error('💥 AuthService: Unexpected error getting user:', error)
-      return null
+      console.error('💥 AuthService: Unexpected error getting user:', error);
+      return null;
     }
   }
 
   static async exchangeCodeForToken(code: string): Promise<any> {
-    console.log('🔄 Exchanging authorization code for token...')
+    console.log('🔄 Exchanging authorization code for token...');
     
     try {
       const response = await fetch('/api/auth/instagram/token', {
@@ -120,27 +199,27 @@ export class AuthService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ code }),
-      })
+      });
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('❌ Token exchange failed:', response.status, errorText)
-        throw new Error(`Failed to exchange code for token: ${response.status} ${errorText}`)
+        const errorText = await response.text();
+        console.error('❌ Token exchange failed:', response.status, errorText);
+        throw new Error(`Failed to exchange code for token: ${response.status} ${errorText}`);
       }
 
-      const tokenData = await response.json()
-      console.log('✅ Token exchange successful')
-      return tokenData
+      const tokenData = await response.json();
+      console.log('✅ Token exchange successful');
+      return tokenData;
 
     } catch (error) {
-      console.error('❌ Token exchange error:', error)
-      throw error
+      console.error('❌ Token exchange error:', error);
+      throw error;
     }
   }
 
   static async saveInstagramAccount(userId: string, accountData: any): Promise<InstagramAccount> {
-    console.log('💾 Saving Instagram account for user:', userId)
-    console.log('📊 Account data:', accountData)
+    console.log('💾 Saving Instagram account for user:', userId);
+    console.log('📊 Account data:', accountData);
     
     try {
       // Use server-side API instead of direct client call to bypass RLS
@@ -153,26 +232,26 @@ export class AuthService {
           userId,
           accountData
         }),
-      })
+      });
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('❌ Save account API failed:', response.status, errorText)
-        throw new Error(`Failed to save Instagram account: ${errorText}`)
+        const errorText = await response.text();
+        console.error('❌ Save account API failed:', response.status, errorText);
+        throw new Error(`Failed to save Instagram account: ${errorText}`);
       }
 
-      const savedAccount = await response.json()
-      console.log('✅ Instagram account saved successfully via API')
-      return savedAccount
+      const savedAccount = await response.json();
+      console.log('✅ Instagram account saved successfully via API');
+      return savedAccount;
 
     } catch (error) {
-      console.error('❌ Save Instagram account error:', error)
-      throw error
+      console.error('❌ Save Instagram account error:', error);
+      throw error;
     }
   }
 
   static async disconnectInstagramAccount(userId: string): Promise<void> {
-    console.log('🔌 Disconnecting Instagram account for user:', userId)
+    console.log('🔌 Disconnecting Instagram account for user:', userId);
     
     try {
       const response = await fetch('/api/auth/instagram/disconnect', {
@@ -181,24 +260,24 @@ export class AuthService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ userId }),
-      })
+      });
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('❌ Instagram disconnect failed:', response.status, errorText)
-        throw new Error(`Failed to disconnect Instagram: ${errorText}`)
+        const errorText = await response.text();
+        console.error('❌ Instagram disconnect failed:', response.status, errorText);
+        throw new Error(`Failed to disconnect Instagram: ${errorText}`);
       }
 
-      console.log('✅ Instagram account disconnected successfully')
+      console.log('✅ Instagram account disconnected successfully');
       
     } catch (error) {
-      console.error('❌ Instagram disconnect error:', error)
-      throw error
+      console.error('❌ Instagram disconnect error:', error);
+      throw error;
     }
   }
 
   static async refreshInstagramToken(accountId: string): Promise<void> {
-    console.log('🔄 Refreshing Instagram token for account:', accountId)
+    console.log('🔄 Refreshing Instagram token for account:', accountId);
     
     try {
       const response = await fetch('/api/auth/instagram/refresh', {
@@ -207,68 +286,91 @@ export class AuthService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ accountId }),
-      })
+      });
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('❌ Token refresh failed:', response.status, errorText)
-        throw new Error(`Failed to refresh token: ${response.status}`)
+        const errorText = await response.text();
+        console.error('❌ Token refresh failed:', response.status, errorText);
+        throw new Error(`Failed to refresh token: ${response.status}`);
       }
 
-      console.log('✅ Token refreshed successfully')
+      console.log('✅ Token refreshed successfully');
 
     } catch (error) {
-      console.error('❌ Token refresh error:', error)
-      throw error
+      console.error('❌ Token refresh error:', error);
+      throw error;
     }
   }
 
   static async signOut(): Promise<void> {
-    console.log('🚪 Signing out...')
+    console.log('🚪 Signing out...');
     
     try {
-      const { error } = await supabase.auth.signOut()
+      const { error } = await supabase.auth.signOut();
       if (error) {
-        console.error('❌ Sign out error:', error)
-        throw new Error(`Sign out failed: ${error.message}`)
+        console.error('❌ Sign out error:', error);
+        throw new Error(`Sign out failed: ${error.message}`);
       }
       
       // Clear any local storage or session data
       if (typeof window !== 'undefined') {
-        localStorage.clear()
-        sessionStorage.clear()
+        localStorage.clear();
+        sessionStorage.clear();
       }
       
-      console.log('✅ Signed out successfully')
+      console.log('✅ Signed out successfully');
       
     } catch (error) {
-      console.error('❌ Sign out error:', error)
-      throw error
+      console.error('❌ Sign out error:', error);
+      throw error;
     }
   }
 
   // Helper method to get auth state changes
   static onAuthStateChange(callback: (event: string, session: any) => void) {
-    return supabase.auth.onAuthStateChange(callback)
+    return supabase.auth.onAuthStateChange(callback);
   }
 
   // Helper method to get current session
   static async getSession() {
     try {
-      const { data: { session }, error } = await supabase.auth.getSession()
+      const { data: { session }, error } = await supabase.auth.getSession();
       
       if (error) {
-        console.error('❌ Error getting session:', error)
-        return null
+        console.error('❌ Error getting session:', error);
+        return null;
       }
       
-      return session
+      return session;
     } catch (error) {
-      console.error('💥 Unexpected error getting session:', error)
-      return null
+      console.error('💥 Unexpected error getting session:', error);
+      return null;
     }
+  }
+
+  // Debug helper to check environment configuration
+  static debugEnvironment() {
+    console.log('🔍 Environment Debug Information:');
+    console.log('- NODE_ENV:', process.env.NODE_ENV);
+    console.log('- Current origin (if browser):', typeof window !== 'undefined' ? window.location.origin : 'N/A');
+    console.log('- NEXT_PUBLIC_APP_URL:', process.env.NEXT_PUBLIC_APP_URL);
+    console.log('- NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI:', process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI);
+    console.log('- NEXT_PUBLIC_INSTAGRAM_CLIENT_ID:', process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID ? '✅ Set' : '❌ Missing');
+    
+    if (typeof window !== 'undefined') {
+      console.log('- SessionStorage oauth data:', {
+        initiated_from: sessionStorage.getItem('oauth_initiated_from'),
+        redirect_uri: sessionStorage.getItem('oauth_redirect_uri'),
+        timestamp: sessionStorage.getItem('oauth_timestamp'),
+        user_id: sessionStorage.getItem('oauth_user_id')
+      });
+    }
+    
+    const baseUrl = this.getBaseUrl();
+    console.log('- Calculated base URL:', baseUrl);
+    console.log('- Calculated redirect URI:', `${baseUrl}/auth/instagram/callback`);
   }
 }
 
 // Export the supabase client for direct use if needed
-export { supabase }
+export { supabase };
