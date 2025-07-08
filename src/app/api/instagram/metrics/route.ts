@@ -667,61 +667,97 @@ async function captureDailySnapshot(
 }
 
 // NEW: Function to fetch historical data for charts
+// FIXED: Function to fetch historical data for charts from daily_snapshots
 async function fetchHistoricalData(
   supabase: any, 
   instagramAccountId: string,
   currentFollowers: number
 ): Promise<{ weekly: HistoricalDataPoint[], monthly: HistoricalDataPoint[] }> {
   try {
-    // Fetch weekly snapshots
-    const weeklyResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/instagram/weekly-snapshots`,
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': await cookies().toString()
-        }
-      }
-    );
+    console.log('📊 Fetching historical data from daily_snapshots for charts...')
     
-    // Fetch monthly snapshots
-    const monthlyResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/instagram/monthly-snapshots`,
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': await cookies().toString()
-        }
+    // Fetch all daily snapshots for this account
+    const { data: snapshots, error } = await supabase
+      .from('daily_snapshots')
+      .select('snapshot_date, followers_count')
+      .eq('instagram_account_id', instagramAccountId)
+      .order('snapshot_date', { ascending: true })
+
+    if (error || !snapshots || snapshots.length === 0) {
+      console.log('❌ No historical snapshots found:', error?.message || 'No data')
+      return { weekly: [], monthly: [] }
+    }
+
+    console.log(`✅ Found ${snapshots.length} daily snapshots for charts`)
+
+    // Transform daily snapshots into weekly data points
+    const weekly: HistoricalDataPoint[] = []
+    const weeklyGroups = new Map<string, { followers: number[], dates: string[] }>()
+    
+    snapshots.forEach((snapshot: { snapshot_date: string, followers_count: number }) => {
+      const date = new Date(snapshot.snapshot_date)
+      const weekStart = new Date(date)
+      weekStart.setDate(date.getDate() - date.getDay()) // Start of week (Sunday)
+      const weekKey = weekStart.toISOString().split('T')[0]
+      
+      if (!weeklyGroups.has(weekKey)) {
+        weeklyGroups.set(weekKey, { followers: [], dates: [] })
       }
-    );
+      
+      weeklyGroups.get(weekKey)!.followers.push(snapshot.followers_count)
+      weeklyGroups.get(weekKey)!.dates.push(snapshot.snapshot_date)
+    })
 
-    let weekly: HistoricalDataPoint[] = []
-    let monthly: HistoricalDataPoint[] = []
+    // Convert weekly groups to data points
+    Array.from(weeklyGroups.entries()).forEach(([weekStart, data]) => {
+      const avgFollowers = Math.round(data.followers.reduce((sum, f) => sum + f, 0) / data.followers.length)
+      const isCurrentWeek = new Date(weekStart) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+      
+      weekly.push({
+        date: weekStart,
+        followers: avgFollowers,
+        isComplete: !isCurrentWeek
+      })
+    })
 
-    if (weeklyResponse.ok) {
-      const weeklyData = await weeklyResponse.json()
-      weekly = weeklyData.snapshots || []
-    }
+    // Transform daily snapshots into monthly data points
+    const monthly: HistoricalDataPoint[] = []
+    const monthlyGroups = new Map<string, { followers: number[], dates: string[] }>()
+    
+    snapshots.forEach((snapshot: { snapshot_date: string, followers_count: number }) => {
+      const date = new Date(snapshot.snapshot_date)
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+      
+      if (!monthlyGroups.has(monthKey)) {
+        monthlyGroups.set(monthKey, { followers: [], dates: [] })
+      }
+      
+      monthlyGroups.get(monthKey)!.followers.push(snapshot.followers_count)
+      monthlyGroups.get(monthKey)!.dates.push(snapshot.snapshot_date)
+    })
 
-    if (monthlyResponse.ok) {
-      const monthlyData = await monthlyResponse.json()
-      monthly = monthlyData.snapshots?.map((snapshot: any) => ({
-        date: snapshot.month,
-        followers: snapshot.followers_count,
-        isComplete: snapshot.is_final
-      })) || []
-    }
+    // Convert monthly groups to data points
+    Array.from(monthlyGroups.entries()).forEach(([month, data]) => {
+      const avgFollowers = Math.round(data.followers.reduce((sum, f) => sum + f, 0) / data.followers.length)
+      const isCurrentMonth = month === new Date().toISOString().slice(0, 7)
+      
+      monthly.push({
+        date: month,
+        followers: avgFollowers,
+        isComplete: !isCurrentMonth
+      })
+    })
 
-    // Ensure current data is included
+    // Add current data point if not already included
     const now = new Date()
     
-    // Add current week if not included
+    // Add current week if we have data
     if (weekly.length > 0) {
-      const lastWeeklyDate = new Date(weekly[weekly.length - 1].date)
+      const lastWeekDate = new Date(weekly[weekly.length - 1].date)
       const currentWeekStart = new Date(now)
       currentWeekStart.setDate(now.getDate() - now.getDay())
       
-      if (lastWeeklyDate < currentWeekStart) {
+      if (lastWeekDate < currentWeekStart) {
         weekly.push({
           date: currentWeekStart.toISOString().split('T')[0],
           followers: currentFollowers,
@@ -730,12 +766,12 @@ async function fetchHistoricalData(
       }
     }
     
-    // Add current month if not included
+    // Add current month if we have data
     if (monthly.length > 0) {
-      const lastMonthlyDate = monthly[monthly.length - 1].date
       const currentMonth = now.toISOString().slice(0, 7)
+      const hasCurrentMonth = monthly.some(m => m.date === currentMonth)
       
-      if (lastMonthlyDate < currentMonth) {
+      if (!hasCurrentMonth) {
         monthly.push({
           date: currentMonth,
           followers: currentFollowers,
@@ -744,9 +780,13 @@ async function fetchHistoricalData(
       }
     }
 
+    console.log(`📊 Generated chart data: ${weekly.length} weekly points, ${monthly.length} monthly points`)
+    console.log('📈 Weekly data:', weekly.map(w => `${w.date}: ${w.followers}`))
+    console.log('📈 Monthly data:', monthly.map(m => `${m.date}: ${m.followers}`))
+
     return { weekly, monthly }
   } catch (error) {
-    console.error('Error fetching historical data:', error)
+    console.error('❌ Error fetching historical data for charts:', error)
     return { weekly: [], monthly: [] }
   }
 }

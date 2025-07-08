@@ -3,6 +3,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Home, BarChart3, Bell, User, Plus, TrendingUp, Users, Heart, MessageCircle, Share, MoreHorizontal } from 'lucide-react';
 import { AuthService } from '@/lib/auth'
+import { useAnalytics, ClickTracker, ViewTracker } from '@/components/AnalyticsProvider'
 
 // Type definitions
 interface Metric {
@@ -226,9 +227,29 @@ const SocialSageMobile = () => {
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
 
-  // Logout function
+  // Analytics tracking
+  const { trackFeature, trackEngagement, trackFunnel } = useAnalytics()
+
+  // Track initial app load
+  useEffect(() => {
+    trackEngagement('app_loaded', {
+      initial_tab: activeTab,
+      has_instagram_data: !!instagramData
+    })
+    
+    trackFunnel('user_onboarding', 'app_opened', 1, true)
+  }, [])
+
+  // Logout function with tracking
   const handleLogout = async () => {
     console.log('🚪 Logging out from dashboard...')
+    
+    // Track logout attempt
+    trackEngagement('user_logout', {
+      session_duration: Date.now() - (performance.timing?.navigationStart || Date.now()),
+      tabs_visited: [activeTab], // Could track more if you store tab history
+      had_instagram_connected: !!instagramData
+    })
     
     try {
       sessionStorage.removeItem('socialsage_user_id')
@@ -239,8 +260,10 @@ const SocialSageMobile = () => {
       
       if (error) {
         console.error('❌ Logout error:', error)
+        trackEngagement('logout_failed', { error: error.message })
       } else {
         console.log('✅ Logged out successfully')
+        trackEngagement('logout_successful')
       }
       
       router.push('/')
@@ -248,15 +271,20 @@ const SocialSageMobile = () => {
       
     } catch (error) {
       console.error('❌ Error during logout:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      trackEngagement('logout_error', { error: errorMessage })
       router.push('/')
     }
   }
 
-  // Fetch real Instagram data
+  // Fetch real Instagram data with tracking
   useEffect(() => {
     const fetchInstagramData = async () => {
       console.log('📡 SocialSage: Fetching Instagram data...');
       setIsLoadingData(true);
+      
+      // Track data fetch attempt
+      trackEngagement('instagram_data_fetch_started')
       
       try {
         const response = await fetch('/api/instagram/metrics');
@@ -267,14 +295,48 @@ const SocialSageMobile = () => {
           console.log('🔍 SocialSage: Instagram API Response:', data);
           setInstagramData(data);
           setDataError(null);
+          
+          // Track successful data fetch
+          trackEngagement('instagram_data_fetch_success', {
+            followers: data.followers,
+            posts_count: data.recentPosts?.length || 0,
+            engagement_rate: data.engagementRate,
+            has_insights: !!data.accountInsights
+          })
+          
+          // Track Instagram connection status
+          if (data.followers > 0) {
+            trackEngagement('instagram_connected_detected', {
+              follower_count: data.followers,
+              account_type: data.followers < 1000 ? 'micro' : data.followers < 10000 ? 'small' : 'large'
+            })
+            
+            // Complete Instagram onboarding funnel
+            trackFunnel('instagram_onboarding', 'data_loaded', 3, true, {
+              followers: data.followers
+            })
+          }
+          
         } else {
           const error = await response.json();
           console.error('❌ SocialSage: API Error:', error);
           setDataError(error.error || 'Failed to fetch Instagram data');
+          
+          // Track data fetch error
+          trackEngagement('instagram_data_fetch_failed', {
+            error: error.error,
+            status_code: response.status
+          })
         }
       } catch (error) {
         console.error('❌ SocialSage: Failed to fetch Instagram data:', error);
         setDataError('Network error while fetching data. Please check your Instagram connection.');
+        
+        // Track network error
+        trackEngagement('instagram_data_fetch_error', {
+          error: error instanceof Error ? error.message : String(error),
+          error_type: 'network'
+        })
       }
       
       setIsLoadingData(false);
@@ -287,8 +349,26 @@ const SocialSageMobile = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Track timeframe changes
+  const handleTimeFrameChange = (newTimeFrame: TimeFrame) => {
+    const previousTimeFrame = timeFrame
+    setTimeFrame(newTimeFrame)
+    
+    trackFeature('timeframe_selector', 'click', {
+      new_timeframe: newTimeFrame,
+      previous_timeframe: previousTimeFrame,
+      current_tab: activeTab
+    })
+  }
+
   // NEW: Calculate real timing data from posts WITH heatmap support
   const calculateTimingOptimization = (posts: InstagramPost[]): { timeSlots: TimeSlot[], heatmapData: HeatmapCell[] } => {
+    // Track timing analysis usage
+    trackFeature('timing_optimization', 'view', {
+      posts_analyzed: posts.length,
+      has_data: posts.length > 0
+    })
+    
     if (!posts || posts.length === 0) {
       return { timeSlots: [], heatmapData: [] };
     }
@@ -419,6 +499,12 @@ const SocialSageMobile = () => {
 
   // NEW: Calculate real frequency data from posts
   const calculateFrequencyOptimization = (posts: InstagramPost[]): FrequencyData => {
+    // Track frequency analysis usage
+    trackFeature('frequency_optimization', 'view', {
+      posts_analyzed: posts.length,
+      has_data: posts.length > 0
+    })
+    
     if (!posts || posts.length === 0) {
       return {
         currentFrequency: 0,
@@ -720,13 +806,85 @@ const SocialSageMobile = () => {
 
   const metricCategories = getMetricCategories();
 
+  // Track metric category selection with analytics
+  const handleMetricCategorySelect = (categoryId: string) => {
+    const category = metricCategories.find(c => c.id === categoryId)
+    setSelectedMetricCategory(categoryId)
+    
+    // Track feature usage
+    trackFeature(`metric_category_${categoryId}`, 'click', {
+      category_title: category?.title,
+      has_instagram_data: !!instagramData,
+      user_followers: instagramData?.followers || 0,
+      metrics_count: category?.metrics?.length || 0
+    })
+    
+    // Track specific analytics features
+    if (categoryId === 'timing') {
+      trackEngagement('timing_optimization_accessed', {
+        posts_available: instagramData?.recentPosts?.length || 0
+      })
+    } else if (categoryId === 'frequency') {
+      trackEngagement('frequency_optimization_accessed', {
+        posts_available: instagramData?.recentPosts?.length || 0
+      })
+    } else if (categoryId === 'content') {
+      trackEngagement('content_analysis_accessed', {
+        posts_available: instagramData?.recentPosts?.length || 0
+      })
+    }
+  }
+
+  // Track tab navigation with analytics  
+  const handleTabChange = (tabId: string) => {
+    const previousTab = activeTab
+    setActiveTab(tabId)
+    
+    // Track navigation
+    trackFeature(`tab_${tabId}`, 'click', {
+      previous_tab: previousTab,
+      has_instagram_data: !!instagramData,
+      user_followers: instagramData?.followers || 0
+    })
+    
+    // Track specific tab access
+    trackEngagement(`${tabId}_tab_accessed`, {
+      from_tab: previousTab,
+      session_depth: performance.now() / 1000 // Time since page load
+    })
+  }
+
   const MetricDetailView = ({ category }: { category: MetricCategory }) => {
+    // Track when user enters detail view
+    useEffect(() => {
+      trackFeature(`metric_detail_${category.id}`, 'view', {
+        category_title: category.title,
+        time_entered: new Date().toISOString()
+      })
+      
+      const startTime = Date.now()
+      return () => {
+        const timeSpent = Date.now() - startTime
+        if (timeSpent > 3000) { // Only track if spent more than 3 seconds
+          trackFeature(`metric_detail_${category.id}`, 'interact', {
+            time_spent_seconds: Math.round(timeSpent / 1000),
+            category_title: category.title
+          })
+        }
+      }
+    }, [category.id])
+
     if (category.id === 'content') {
       // Calculate content type performance from real data
       const getContentTypeData = () => {
         if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
           return [];
         }
+
+        // Track content analysis usage
+        trackFeature('content_analysis_detailed', 'view', {
+          posts_analyzed: instagramData.recentPosts.length
+        })
 
         // Group posts by type and calculate averages
         const typeGroups = new Map();
@@ -793,12 +951,17 @@ const SocialSageMobile = () => {
       return (
         <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-teal-50 to-cyan-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-teal-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <button 
-              onClick={() => setSelectedMetricCategory(null)}
-              className="mr-3 text-teal-600 font-medium"
+            <ClickTracker
+              featureName="metric_detail_back_button"
+              metadata={{ from_category: category.id }}
             >
-              ← Back
-            </button>
+              <button 
+                onClick={() => setSelectedMetricCategory(null)}
+                className="mr-3 text-teal-600 font-medium"
+              >
+                ← Back
+              </button>
+            </ClickTracker>
             <div className="flex items-center">
               <span className="mr-2">📊</span>
               <h1 className="text-xl font-bold text-gray-900">Content Analysis</h1>
@@ -818,65 +981,75 @@ const SocialSageMobile = () => {
                 {/* Content Type Rankings */}
                 <div className="space-y-4 mb-6">
                   {contentTypes.map((contentType, index) => (
-                    <div key={contentType.type} className={`bg-gradient-to-br ${contentType.bgColor} ${contentType.borderColor} rounded-2xl p-4 shadow-sm border`}>
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-12 h-12 bg-gradient-to-br from-gray-700 to-gray-800 rounded-full flex items-center justify-center">
-                            <span className="text-white text-sm font-bold">#{index + 1}</span>
-                          </div>
-                          <div>
-                            <div className="flex items-center space-x-2">
-                              <span className="text-2xl">{contentType.emoji}</span>
-                              <span className="text-lg font-bold text-gray-900">{contentType.type}</span>
+                    <ViewTracker
+                      key={contentType.type}
+                      featureName={`content_type_${contentType.type.toLowerCase()}`}
+                      metadata={{ 
+                        ranking: index + 1, 
+                        avg_engagement: contentType.avgLikes + contentType.avgComments,
+                        post_count: contentType.count
+                      }}
+                    >
+                      <div className={`bg-gradient-to-br ${contentType.bgColor} ${contentType.borderColor} rounded-2xl p-4 shadow-sm border`}>
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-12 h-12 bg-gradient-to-br from-gray-700 to-gray-800 rounded-full flex items-center justify-center">
+                              <span className="text-white text-sm font-bold">#{index + 1}</span>
                             </div>
-                            <div className="text-sm text-gray-600">{contentType.count} posts analyzed</div>
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-2xl">{contentType.emoji}</span>
+                                <span className="text-lg font-bold text-gray-900">{contentType.type}</span>
+                              </div>
+                              <div className="text-sm text-gray-600">{contentType.count} posts analyzed</div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className={`text-xl font-bold bg-gradient-to-r ${contentType.color} bg-clip-text text-transparent`}>
+                              {contentType.engagementRate}
+                            </div>
+                            <div className="text-xs text-gray-600">Engagement Rate</div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className={`text-xl font-bold bg-gradient-to-r ${contentType.color} bg-clip-text text-transparent`}>
-                            {contentType.engagementRate}
+                        
+                        {/* Metrics Grid */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                            <div className="flex items-center justify-center space-x-1 mb-1">
+                              <Heart className="w-4 h-4 text-red-500" />
+                              <span className="text-sm font-semibold text-gray-900">{contentType.avgLikes}</span>
+                            </div>
+                            <div className="text-xs text-gray-600">Avg Likes</div>
                           </div>
-                          <div className="text-xs text-gray-600">Engagement Rate</div>
+                          
+                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                            <div className="flex items-center justify-center space-x-1 mb-1">
+                              <MessageCircle className="w-4 h-4 text-blue-500" />
+                              <span className="text-sm font-semibold text-gray-900">{contentType.avgComments}</span>
+                            </div>
+                            <div className="text-xs text-gray-600">Avg Comments</div>
+                          </div>
+                          
+                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                            <div className="flex items-center justify-center space-x-1 mb-1">
+                              <TrendingUp className="w-4 h-4 text-green-500" />
+                              <span className="text-sm font-semibold text-gray-900">
+                                {contentType.avgReach >= 1000 ? `${(contentType.avgReach / 1000).toFixed(1)}K` : contentType.avgReach}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-600">Avg Reach</div>
+                          </div>
+                          
+                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                            <div className="flex items-center justify-center space-x-1 mb-1">
+                              <Share className="w-4 h-4 text-purple-500" />
+                              <span className="text-sm font-semibold text-gray-900">{contentType.avgShares}</span>
+                            </div>
+                            <div className="text-xs text-gray-600">Avg Shares</div>
+                          </div>
                         </div>
                       </div>
-                      
-                      {/* Metrics Grid */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                          <div className="flex items-center justify-center space-x-1 mb-1">
-                            <Heart className="w-4 h-4 text-red-500" />
-                            <span className="text-sm font-semibold text-gray-900">{contentType.avgLikes}</span>
-                          </div>
-                          <div className="text-xs text-gray-600">Avg Likes</div>
-                        </div>
-                        
-                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                          <div className="flex items-center justify-center space-x-1 mb-1">
-                            <MessageCircle className="w-4 h-4 text-blue-500" />
-                            <span className="text-sm font-semibold text-gray-900">{contentType.avgComments}</span>
-                          </div>
-                          <div className="text-xs text-gray-600">Avg Comments</div>
-                        </div>
-                        
-                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                          <div className="flex items-center justify-center space-x-1 mb-1">
-                            <TrendingUp className="w-4 h-4 text-green-500" />
-                            <span className="text-sm font-semibold text-gray-900">
-                              {contentType.avgReach >= 1000 ? `${(contentType.avgReach / 1000).toFixed(1)}K` : contentType.avgReach}
-                            </span>
-                          </div>
-                          <div className="text-xs text-gray-600">Avg Reach</div>
-                        </div>
-                        
-                        <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
-                          <div className="flex items-center justify-center space-x-1 mb-1">
-                            <Share className="w-4 h-4 text-purple-500" />
-                            <span className="text-sm font-semibold text-gray-900">{contentType.avgShares}</span>
-                          </div>
-                          <div className="text-xs text-gray-600">Avg Shares</div>
-                        </div>
-                      </div>
-                    </div>
+                    </ViewTracker>
                   ))}
                 </div>
               </>
@@ -905,6 +1078,14 @@ const SocialSageMobile = () => {
       const timeSlots = timingResult?.timeSlots || [];
       const heatmapData = timingResult?.heatmapData || [];
 
+      // Track heatmap interaction
+      const handleHeatmapInteraction = () => {
+        trackFeature('timing_heatmap', 'interact', {
+          time_slots_available: timeSlots.length,
+          posts_analyzed: instagramData?.recentPosts?.length || 0
+        })
+      }
+
       // Helper function to get color intensity for heatmap cells
       const getHeatmapColor = (intensity: number, hasData: boolean) => {
         if (!hasData || intensity === 0) {
@@ -932,12 +1113,17 @@ const SocialSageMobile = () => {
       return (
         <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-purple-50 to-pink-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-purple-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <button 
-              onClick={() => setSelectedMetricCategory(null)}
-              className="mr-3 text-purple-600 font-medium"
+            <ClickTracker
+              featureName="timing_optimization_back"
+              metadata={{ time_spent: Date.now() }}
             >
-              ← Back
-            </button>
+              <button 
+                onClick={() => setSelectedMetricCategory(null)}
+                className="mr-3 text-purple-600 font-medium"
+              >
+                ← Back
+              </button>
+            </ClickTracker>
             <div className="flex items-center">
               <span className="mr-2">⏰</span>
               <h1 className="text-xl font-bold text-gray-900">Timing Optimization</h1>
@@ -958,74 +1144,82 @@ const SocialSageMobile = () => {
             {heatmapData.length > 0 ? (
               <>
                 {/* HEATMAP GRID */}
-                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                  <h3 className="font-semibold text-gray-900 text-sm mb-4 flex items-center">
-                    <span className="mr-2">🔥</span>
-                    Engagement Heatmap
-                  </h3>
-                  
-                  {/* Legend */}
-                  <div className="flex items-center justify-center space-x-2 mb-4 text-xs">
-                    <span className="text-gray-600">Low</span>
-                    <div className="flex space-x-1">
-                      <div className="w-3 h-3 bg-gray-200 rounded"></div>
-                      <div className="w-3 h-3 bg-gradient-to-br from-purple-400 to-pink-500 rounded"></div>
-                      <div className="w-3 h-3 bg-gradient-to-br from-blue-400 to-purple-500 rounded"></div>
-                      <div className="w-3 h-3 bg-gradient-to-br from-yellow-400 to-orange-500 rounded"></div>
-                      <div className="w-3 h-3 bg-gradient-to-br from-green-400 to-emerald-500 rounded"></div>
+                <ViewTracker
+                  featureName="timing_heatmap_view"
+                  metadata={{
+                    posts_analyzed: instagramData?.recentPosts?.length || 0,
+                    time_slots_found: timeSlots.length
+                  }}
+                >
+                  <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                    <h3 className="font-semibold text-gray-900 text-sm mb-4 flex items-center">
+                      <span className="mr-2">🔥</span>
+                      Engagement Heatmap
+                    </h3>
+                    
+                    {/* Legend */}
+                    <div className="flex items-center justify-center space-x-2 mb-4 text-xs">
+                      <span className="text-gray-600">Low</span>
+                      <div className="flex space-x-1">
+                        <div className="w-3 h-3 bg-gray-200 rounded"></div>
+                        <div className="w-3 h-3 bg-gradient-to-br from-purple-400 to-pink-500 rounded"></div>
+                        <div className="w-3 h-3 bg-gradient-to-br from-blue-400 to-purple-500 rounded"></div>
+                        <div className="w-3 h-3 bg-gradient-to-br from-yellow-400 to-orange-500 rounded"></div>
+                        <div className="w-3 h-3 bg-gradient-to-br from-green-400 to-emerald-500 rounded"></div>
+                      </div>
+                      <span className="text-gray-600">High</span>
                     </div>
-                    <span className="text-gray-600">High</span>
-                  </div>
 
-                  {/* Heatmap Grid */}
-                  <div className="overflow-x-auto">
-                    <div className="min-w-max">
-                      {/* Header with days */}
-                      <div className="grid grid-cols-8 gap-1 mb-1">
-                        <div className="text-xs text-gray-500 text-center py-1"></div>
-                        {days.map(day => (
-                          <div key={day} className="text-xs text-gray-700 text-center py-1 font-medium">
-                            {day}
+                    {/* Heatmap Grid */}
+                    <div className="overflow-x-auto" onClick={handleHeatmapInteraction}>
+                      <div className="min-w-max">
+                        {/* Header with days */}
+                        <div className="grid grid-cols-8 gap-1 mb-1">
+                          <div className="text-xs text-gray-500 text-center py-1"></div>
+                          {days.map(day => (
+                            <div key={day} className="text-xs text-gray-700 text-center py-1 font-medium">
+                              {day}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Hour rows - show every 3 hours to fit mobile */}
+                        {hours.filter((_, index) => index % 3 === 0).map(hour => (
+                          <div key={hour} className="grid grid-cols-8 gap-1 mb-1">
+                            <div className="text-xs text-gray-500 text-right py-1 pr-2 font-medium">
+                              {formatHour(hour)}
+                            </div>
+                            {days.map((day, dayIndex) => {
+                              const cellData = heatmapData.find(cell => 
+                                cell.dayIndex === dayIndex && cell.hour === hour
+                              );
+                              const hasData = cellData && cellData.postCount > 0;
+                              
+                              return (
+                                <div
+                                  key={`${dayIndex}-${hour}`}
+                                  className={`w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold transition-all hover:scale-110 cursor-pointer ${
+                                    getHeatmapColor(cellData?.intensity || 0, !!hasData)
+                                  }`}
+                                  title={hasData 
+                                    ? `${day} ${formatHour(hour)}: ${cellData.engagementScore} score (${cellData.postCount} posts)`
+                                    : `${day} ${formatHour(hour)}: No posts`
+                                  }
+                                >
+                                  {hasData ? cellData.postCount : ''}
+                                </div>
+                              );
+                            })}
                           </div>
                         ))}
                       </div>
+                    </div>
 
-                      {/* Hour rows - show every 3 hours to fit mobile */}
-                      {hours.filter((_, index) => index % 3 === 0).map(hour => (
-                        <div key={hour} className="grid grid-cols-8 gap-1 mb-1">
-                          <div className="text-xs text-gray-500 text-right py-1 pr-2 font-medium">
-                            {formatHour(hour)}
-                          </div>
-                          {days.map((day, dayIndex) => {
-                            const cellData = heatmapData.find(cell => 
-                              cell.dayIndex === dayIndex && cell.hour === hour
-                            );
-                            const hasData = cellData && cellData.postCount > 0;
-                            
-                            return (
-                              <div
-                                key={`${dayIndex}-${hour}`}
-                                className={`w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold transition-all hover:scale-110 cursor-pointer ${
-                                  getHeatmapColor(cellData?.intensity || 0, !!hasData)
-                                }`}
-                                title={hasData 
-                                  ? `${day} ${formatHour(hour)}: ${cellData.engagementScore} score (${cellData.postCount} posts)`
-                                  : `${day} ${formatHour(hour)}: No posts`
-                                }
-                              >
-                                {hasData ? cellData.postCount : ''}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ))}
+                    <div className="text-xs text-gray-500 text-center mt-3">
+                      Numbers show post count • Hover for details • Showing every 3rd hour
                     </div>
                   </div>
-
-                  <div className="text-xs text-gray-500 text-center mt-3">
-                    Numbers show post count • Hover for details • Showing every 3rd hour
-                  </div>
-                </div>
+                </ViewTracker>
 
                 {/* Top 5 Time Slots */}
                 <div className="mb-6">
@@ -1035,56 +1229,50 @@ const SocialSageMobile = () => {
                   </h3>
                   <div className="space-y-3">
                     {timeSlots.slice(0, 5).map((slot, index) => (
-                      <div key={index} className="bg-gradient-to-br from-purple-50 to-pink-100 rounded-xl p-3 border border-purple-200/50">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center space-x-2">
-                            <div className="w-6 h-6 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center">
-                              <span className="text-white text-xs font-bold">#{index + 1}</span>
+                      <ViewTracker
+                        key={index}
+                        featureName={`timing_slot_${index + 1}`}
+                        metadata={{
+                          time_slot: slot.time,
+                          engagement_score: slot.engagementScore,
+                          post_count: slot.postCount
+                        }}
+                      >
+                        <div className="bg-gradient-to-br from-purple-50 to-pink-100 rounded-xl p-3 border border-purple-200/50">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center space-x-2">
+                              <div className="w-6 h-6 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center">
+                                <span className="text-white text-xs font-bold">#{index + 1}</span>
+                              </div>
+                              <span className="font-semibold text-gray-900">{slot.time}</span>
                             </div>
-                            <span className="font-semibold text-gray-900">{slot.time}</span>
+                            <div className="text-right">
+                              <div className="text-sm font-bold text-purple-700">{slot.engagementScore}</div>
+                              <div className="text-xs text-gray-600">score</div>
+                            </div>
                           </div>
-                          <div className="text-right">
-                            <div className="text-sm font-bold text-purple-700">{slot.engagementScore}</div>
-                            <div className="text-xs text-gray-600">score</div>
+                          
+                          <div className="grid grid-cols-3 gap-2">
+                            <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center">
+                              <div className="text-sm font-bold text-gray-900">{slot.avgLikes}</div>
+                              <div className="text-xs text-gray-600">Avg Likes</div>
+                            </div>
+                            <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center">
+                              <div className="text-sm font-bold text-gray-900">{slot.avgComments}</div>
+                              <div className="text-xs text-gray-600">Avg Comments</div>
+                            </div>
+                            <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center">
+                              <div className="text-sm font-bold text-gray-900">{slot.avgReach}</div>
+                              <div className="text-xs text-gray-600">Avg Reach</div>
+                            </div>
+                          </div>
+                          
+                          <div className="mt-2 text-xs text-gray-500 text-center">
+                            Based on {slot.postCount} posts
                           </div>
                         </div>
-                        
-                        <div className="grid grid-cols-3 gap-2">
-                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center">
-                            <div className="text-sm font-bold text-gray-900">{slot.avgLikes}</div>
-                            <div className="text-xs text-gray-600">Avg Likes</div>
-                          </div>
-                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center">
-                            <div className="text-sm font-bold text-gray-900">{slot.avgComments}</div>
-                            <div className="text-xs text-gray-600">Avg Comments</div>
-                          </div>
-                          <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center">
-                            <div className="text-sm font-bold text-gray-900">{slot.avgReach}</div>
-                            <div className="text-xs text-gray-600">Avg Reach</div>
-                          </div>
-                        </div>
-                        
-                        <div className="mt-2 text-xs text-gray-500 text-center">
-                          Based on {slot.postCount} posts
-                        </div>
-                      </div>
+                      </ViewTracker>
                     ))}
-                  </div>
-                </div>
-
-                {/* Recommendations */}
-                <div className="mt-6 bg-purple-50 rounded-2xl p-4">
-                  <h3 className="font-semibold text-purple-900 mb-2">💡 Recommendations</h3>
-                  <div className="space-y-2 text-sm">
-                    <p className="text-purple-800">
-                      • Your best time slot is <strong>{timeSlots[0]?.time}</strong> with {timeSlots[0]?.avgLikes} average likes
-                    </p>
-                    <p className="text-purple-800">
-                      • You've tested {timeSlots.length} different time slots - try posting more during top performers
-                    </p>
-                    <p className="text-purple-800">
-                      • Consider posting during {timeSlots.slice(0, 3).map(slot => slot.time).join(', ')} for best results
-                    </p>
                   </div>
                 </div>
               </>
@@ -1114,12 +1302,17 @@ const SocialSageMobile = () => {
       return (
         <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-orange-50 to-red-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-orange-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <button 
-              onClick={() => setSelectedMetricCategory(null)}
-              className="mr-3 text-orange-600 font-medium"
+            <ClickTracker
+              featureName="frequency_optimization_back"
+              metadata={{ category: 'frequency' }}
             >
-              ← Back
-            </button>
+              <button 
+                onClick={() => setSelectedMetricCategory(null)}
+                className="mr-3 text-orange-600 font-medium"
+              >
+                ← Back
+              </button>
+            </ClickTracker>
             <div className="flex items-center">
               <span className="mr-2">📈</span>
               <h1 className="text-xl font-bold text-gray-900">Frequency Optimization</h1>
@@ -1140,86 +1333,104 @@ const SocialSageMobile = () => {
             {frequencyData ? (
               <>
                 {/* Current vs Optimal Frequency */}
-                <div className="grid grid-cols-2 gap-3 mb-6">
-                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 text-center border border-blue-200">
-                    <div className="text-2xl font-bold text-blue-700">{frequencyData.currentFrequency}</div>
-                    <div className="text-sm text-blue-600">Posts/Week</div>
-                    <div className="text-xs text-gray-600 mt-1">Current Frequency</div>
+                <ViewTracker
+                  featureName="frequency_comparison"
+                  metadata={{
+                    current_frequency: frequencyData.currentFrequency,
+                    optimal_frequency: frequencyData.optimalFrequency
+                  }}
+                >
+                  <div className="grid grid-cols-2 gap-3 mb-6">
+                    <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 text-center border border-blue-200">
+                      <div className="text-2xl font-bold text-blue-700">{frequencyData.currentFrequency}</div>
+                      <div className="text-sm text-blue-600">Posts/Week</div>
+                      <div className="text-xs text-gray-600 mt-1">Current Frequency</div>
+                    </div>
+                    <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-4 text-center border border-green-200">
+                      <div className="text-2xl font-bold text-green-700">{frequencyData.optimalFrequency}</div>
+                      <div className="text-sm text-green-600">Posts/Week</div>
+                      <div className="text-xs text-gray-600 mt-1">Optimal Frequency</div>
+                    </div>
                   </div>
-                  <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-4 text-center border border-green-200">
-                    <div className="text-2xl font-bold text-green-700">{frequencyData.optimalFrequency}</div>
-                    <div className="text-sm text-green-600">Posts/Week</div>
-                    <div className="text-xs text-gray-600 mt-1">Optimal Frequency</div>
-                  </div>
-                </div>
-
-
+                </ViewTracker>
 
                 {/* Performance by Frequency */}
-                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-4">
-                  <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
-                    <span className="mr-2">📊</span>
-                    Performance by Frequency
-                  </h3>
-                  
-                  <div className="space-y-3">
-                    {frequencyData.performanceByFrequency.map((bucket, index) => (
-                      <div key={index} className="bg-gradient-to-br from-orange-50 to-red-50 rounded-lg p-3 border border-orange-200/50">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium text-gray-900">{bucket.range}</span>
-                          <div className="text-right">
-                            <div className="text-sm font-bold text-orange-700">{bucket.avgEngagement}</div>
-                            <div className="text-xs text-gray-600">avg engagement</div>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          <div className="flex-1 bg-orange-200 rounded-full h-2">
-                            <div 
-                              className="bg-gradient-to-r from-orange-400 to-red-500 h-2 rounded-full"
-                              style={{ 
-                                width: `${Math.max(10, (bucket.avgEngagement / Math.max(...frequencyData.performanceByFrequency.map(b => b.avgEngagement))) * 100)}%` 
-                              }}
-                            ></div>
-                          </div>
-                          <span className="text-xs text-gray-500">{bucket.postCount} posts</span>
-                        </div>
-                        
-                        {index === 0 && (
-                          <div className="mt-2">
-                            <span className="inline-block px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
-                              Best Performing
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Weekly Pattern */}
-                {frequencyData.weeklyPattern.length > 0 && (
+                <ViewTracker
+                  featureName="frequency_performance_analysis"
+                  metadata={{
+                    frequency_buckets: frequencyData.performanceByFrequency.length
+                  }}
+                >
                   <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-4">
                     <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
-                      <span className="mr-2">📅</span>
-                      Recent Weekly Pattern
+                      <span className="mr-2">📊</span>
+                      Performance by Frequency
                     </h3>
                     
-                    <div className="space-y-2">
-                      {frequencyData.weeklyPattern.slice(-6).map((week, index) => (
-                        <div key={index} className="flex items-center justify-between p-2 bg-orange-50 rounded-lg">
-                          <span className="text-sm text-gray-700">{week.week}</span>
-                          <div className="flex items-center space-x-3">
-                            <span className="text-sm font-medium text-gray-900">{week.postCount} posts</span>
-                            <span className="text-sm text-orange-600">{week.avgEngagement} avg engagement</span>
+                    <div className="space-y-3">
+                      {frequencyData.performanceByFrequency.map((bucket, index) => (
+                        <div key={index} className="bg-gradient-to-br from-orange-50 to-red-50 rounded-lg p-3 border border-orange-200/50">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-medium text-gray-900">{bucket.range}</span>
+                            <div className="text-right">
+                              <div className="text-sm font-bold text-orange-700">{bucket.avgEngagement}</div>
+                              <div className="text-xs text-gray-600">avg engagement</div>
+                            </div>
                           </div>
+                          
+                          <div className="flex items-center space-x-2">
+                            <div className="flex-1 bg-orange-200 rounded-full h-2">
+                              <div 
+                                className="bg-gradient-to-r from-orange-400 to-red-500 h-2 rounded-full"
+                                style={{ 
+                                  width: `${Math.max(10, (bucket.avgEngagement / Math.max(...frequencyData.performanceByFrequency.map(b => b.avgEngagement))) * 100)}%` 
+                                }}
+                              ></div>
+                            </div>
+                            <span className="text-xs text-gray-500">{bucket.postCount} posts</span>
+                          </div>
+                          
+                          {index === 0 && (
+                            <div className="mt-2">
+                              <span className="inline-block px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                                Best Performing
+                              </span>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
                   </div>
+                </ViewTracker>
+
+                {/* Weekly Pattern */}
+                {frequencyData.weeklyPattern.length > 0 && (
+                  <ViewTracker
+                    featureName="frequency_weekly_pattern"
+                    metadata={{
+                      weeks_analyzed: frequencyData.weeklyPattern.length
+                    }}
+                  >
+                    <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-4">
+                      <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
+                        <span className="mr-2">📅</span>
+                        Recent Weekly Pattern
+                      </h3>
+                      
+                      <div className="space-y-2">
+                        {frequencyData.weeklyPattern.slice(-6).map((week, index) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-orange-50 rounded-lg">
+                            <span className="text-sm text-gray-700">{week.week}</span>
+                            <div className="flex items-center space-x-3">
+                              <span className="text-sm font-medium text-gray-900">{week.postCount} posts</span>
+                              <span className="text-sm text-orange-600">{week.avgEngagement} avg engagement</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </ViewTracker>
                 )}
-
-
               </>
             ) : (
               <div className="text-center py-8">
@@ -1275,12 +1486,17 @@ const SocialSageMobile = () => {
       return (
         <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-violet-50 to-purple-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-violet-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <button 
-              onClick={() => setSelectedMetricCategory(null)}
-              className="mr-3 text-violet-600 font-medium"
+            <ClickTracker
+              featureName="top_followers_back"
+              metadata={{ followers_count: realTopFollowers.length }}
             >
-              ← Back
-            </button>
+              <button 
+                onClick={() => setSelectedMetricCategory(null)}
+                className="mr-3 text-violet-600 font-medium"
+              >
+                ← Back
+              </button>
+            </ClickTracker>
             <div className="flex items-center">
               <span className="mr-2">👥</span>
               <h1 className="text-xl font-bold text-gray-900">Top Followers</h1>
@@ -1301,51 +1517,68 @@ const SocialSageMobile = () => {
             </div>
 
             {realTopFollowers.length > 0 ? (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {realTopFollowers.map((follower, index) => {
-                  const badge = getEngagementBadge(follower.engagementType);
-                  return (
-                    <div key={index} className="bg-gradient-to-br from-violet-50 to-purple-100 border border-violet-200/50 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all">
-                      <div className="flex items-start space-x-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-violet-500 to-purple-600 rounded-full flex items-center justify-center shadow-sm flex-shrink-0">
-                          <span className="text-white text-sm font-bold">
-                            {follower.username.slice(0, 2).toUpperCase()}
-                          </span>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex-1 min-w-0">
-                              <h3 className="font-semibold text-gray-900 text-sm truncate">@{follower.username}</h3>
-                              <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium mt-1 ${badge.color}`}>
-                                {badge.text}
+              <ViewTracker
+                featureName="top_followers_list"
+                metadata={{
+                  total_followers: realTopFollowers.length,
+                  super_fans: realTopFollowers.filter(f => f.engagementType === 'high').length
+                }}
+              >
+                <div className="space-y-3">
+                  {realTopFollowers.map((follower, index) => {
+                    const badge = getEngagementBadge(follower.engagementType);
+                    return (
+                      <ViewTracker
+                        key={index}
+                        featureName={`top_follower_${index + 1}`}
+                        metadata={{
+                          engagement_type: follower.engagementType,
+                          interactions: follower.interactions
+                        }}
+                      >
+                        <div className="bg-gradient-to-br from-violet-50 to-purple-100 border border-violet-200/50 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all">
+                          <div className="flex items-start space-x-3">
+                            <div className="w-12 h-12 bg-gradient-to-br from-violet-500 to-purple-600 rounded-full flex items-center justify-center shadow-sm flex-shrink-0">
+                              <span className="text-white text-sm font-bold">
+                                {follower.username.slice(0, 2).toUpperCase()}
                               </span>
                             </div>
-                            <div className="text-right ml-3 flex-shrink-0">
-                              <div className="text-xl font-bold text-violet-700">{follower.interactions}</div>
-                              <div className="text-xs text-gray-600">interactions</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex-1 min-w-0">
+                                  <h3 className="font-semibold text-gray-900 text-sm truncate">@{follower.username}</h3>
+                                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium mt-1 ${badge.color}`}>
+                                    {badge.text}
+                                  </span>
+                                </div>
+                                <div className="text-right ml-3 flex-shrink-0">
+                                  <div className="text-xl font-bold text-violet-700">{follower.interactions}</div>
+                                  <div className="text-xs text-gray-600">interactions</div>
+                                </div>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 gap-2 mb-2">
+                                <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center border border-violet-200/30">
+                                  <div className="text-sm font-semibold text-violet-700">{follower.comments}</div>
+                                  <div className="text-xs text-gray-600">comments</div>
+                                </div>
+                                <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center border border-violet-200/30">
+                                  <div className="text-sm font-semibold text-violet-700">{follower.likes}</div>
+                                  <div className="text-xs text-gray-600">comment likes</div>
+                                </div>
+                              </div>
+                              
+                              <div className="text-xs text-gray-500">
+                                Last seen {formatLastSeen(follower.lastSeen)}
+                              </div>
                             </div>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 gap-2 mb-2">
-                            <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center border border-violet-200/30">
-                              <div className="text-sm font-semibold text-violet-700">{follower.comments}</div>
-                              <div className="text-xs text-gray-600">comments</div>
-                            </div>
-                            <div className="bg-white/60 backdrop-blur-sm rounded-lg p-2 text-center border border-violet-200/30">
-                              <div className="text-sm font-semibold text-violet-700">{follower.likes}</div>
-                              <div className="text-xs text-gray-600">comment likes</div>
-                            </div>
-                          </div>
-                          
-                          <div className="text-xs text-gray-500">
-                            Last seen {formatLastSeen(follower.lastSeen)}
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                      </ViewTracker>
+                    );
+                  })}
+                </div>
+              </ViewTracker>
             ) : (
               <div className="text-center py-8">
                 <div className="w-16 h-16 bg-violet-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1360,31 +1593,6 @@ const SocialSageMobile = () => {
                 </p>
               </div>
             )}
-
-            {realTopFollowers.length > 0 && (
-              <>
-                <div className="mt-6 bg-violet-50 rounded-2xl p-4">
-                  <h3 className="font-semibold text-violet-900 mb-2">💡 Real Insights</h3>
-                  <div className="space-y-2 text-sm">
-                    <p className="text-violet-800">
-                      • You have {realTopFollowers.filter(f => f.engagementType === 'high').length} super fans who comment regularly
-                    </p>
-                    <p className="text-violet-800">
-                      • Your top {Math.min(5, realTopFollowers.length)} followers drive {Math.round((realTopFollowers.slice(0, 5).reduce((sum, f) => sum + f.interactions, 0) / realTopFollowers.reduce((sum, f) => sum + f.interactions, 0)) * 100) || 0}% of your engagement
-                    </p>
-                    <p className="text-violet-800">
-                      • Average {(realTopFollowers.reduce((sum, f) => sum + f.comments, 0) / realTopFollowers.length).toFixed(1)} comments per active follower
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 text-center">
-                  <button className="bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-2xl px-6 py-3 font-medium text-sm shadow-sm hover:shadow-md transition-all">
-                    Export Engagement Report
-                  </button>
-                </div>
-              </>
-            )}
           </div>
         </div>
       );
@@ -1393,6 +1601,15 @@ const SocialSageMobile = () => {
     // Enhanced metric detail view for Growth and Engagement categories
     if (category.id === 'growth') {
       const [growthTimeFrame, setGrowthTimeFrame] = useState<'weekly' | 'monthly'>('weekly');
+      
+      // Track growth timeframe changes
+      const handleGrowthTimeFrameChange = (newTimeFrame: 'weekly' | 'monthly') => {
+        setGrowthTimeFrame(newTimeFrame)
+        trackFeature('growth_timeframe_change', 'click', {
+          new_timeframe: newTimeFrame,
+          previous_timeframe: growthTimeFrame
+        })
+      }
       
       // Get the appropriate growth data based on selected timeframe
       const getCurrentGrowthData = () => {
@@ -1493,12 +1710,17 @@ const SocialSageMobile = () => {
       return (
         <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-emerald-50 to-teal-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-emerald-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <button 
-              onClick={() => setSelectedMetricCategory(null)}
-              className="mr-3 text-emerald-600 font-medium"
+            <ClickTracker
+              featureName="growth_metrics_back"
+              metadata={{ timeframe: growthTimeFrame }}
             >
-              ← Back
-            </button>
+              <button 
+                onClick={() => setSelectedMetricCategory(null)}
+                className="mr-3 text-emerald-600 font-medium"
+              >
+                ← Back
+              </button>
+            </ClickTracker>
             <div className="flex items-center">
               <span className="mr-2">🚀</span>
               <h1 className="text-xl font-bold text-gray-900">Growth Metrics</h1>
@@ -1523,174 +1745,208 @@ const SocialSageMobile = () => {
                   { key: 'weekly' as const, label: 'Weekly' },
                   { key: 'monthly' as const, label: 'Monthly' }
                 ].map((period) => (
-                  <button
+                  <ClickTracker
                     key={period.key}
-                    onClick={() => setGrowthTimeFrame(period.key)}
-                    className={`flex-1 py-2 px-4 text-sm font-medium rounded-lg transition-all ${
-                      growthTimeFrame === period.key
-                        ? 'bg-white text-emerald-700 shadow-sm border border-emerald-300'
-                        : 'text-emerald-600 hover:text-emerald-700'
-                    }`}
+                    featureName="growth_timeframe_toggle"
+                    metadata={{
+                      selected_timeframe: period.key,
+                      has_data: growthData.canCalculate
+                    }}
                   >
-                    {period.label}
-                  </button>
+                    <button
+                      onClick={() => handleGrowthTimeFrameChange(period.key)}
+                      className={`flex-1 py-2 px-4 text-sm font-medium rounded-lg transition-all ${
+                        growthTimeFrame === period.key
+                          ? 'bg-white text-emerald-700 shadow-sm border border-emerald-300'
+                          : 'text-emerald-600 hover:text-emerald-700'
+                      }`}
+                    >
+                      {period.label}
+                    </button>
+                  </ClickTracker>
                 ))}
               </div>
             </div>
 
             {/* Growth Rate Display */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                <span className="mr-2">📈</span>
-                {growthData.label}
-              </h3>
-              
-              {growthData.canCalculate ? (
-                <>
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div className="text-center">
-                      <div className="text-3xl font-bold text-emerald-600 mb-1">
-                        {growthData.rate}
+            <ViewTracker
+              featureName="growth_rate_display"
+              metadata={{
+                timeframe: growthTimeFrame,
+                has_data: growthData.canCalculate,
+                followers: instagramData?.followers || 0
+              }}
+            >
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">📈</span>
+                  {growthData.label}
+                </h3>
+                
+                {growthData.canCalculate ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div className="text-center">
+                        <div className="text-3xl font-bold text-emerald-600 mb-1">
+                          {growthData.rate}
+                        </div>
+                        <div className="text-sm text-gray-600">Growth Rate</div>
                       </div>
-                      <div className="text-sm text-gray-600">Growth Rate</div>
-                    </div>
-                    <div className="text-center">
-                      <div className={`text-3xl font-bold mb-1 ${absoluteChange?.isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {absoluteChange?.formatted || '--'}
+                      <div className="text-center">
+                        <div className={`text-3xl font-bold mb-1 ${absoluteChange?.isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {absoluteChange?.formatted || '--'}
+                        </div>
+                        <div className="text-sm text-gray-600">Followers {growthTimeFrame === 'weekly' ? 'This Week' : 'This Month'}</div>
                       </div>
-                      <div className="text-sm text-gray-600">Followers {growthTimeFrame === 'weekly' ? 'This Week' : 'This Month'}</div>
+                    </div>
+                    
+                    <div className="text-center text-sm text-gray-600">
+                      Growth over {growthData.period}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-6">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <span className="text-gray-400 text-2xl">📊</span>
+                    </div>
+                    <h4 className="text-lg font-semibold text-gray-900 mb-2">Not Enough Data Yet</h4>
+                    <p className="text-gray-600 text-sm mb-4">
+                      We need {growthTimeFrame === 'weekly' ? '7' : '30'} days of data to calculate accurate {growthTimeFrame} growth rates.
+                    </p>
+                    <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                      <div className="text-sm font-medium text-blue-900">
+                        {growthData.label} available in {growthData.daysUntil} days
+                      </div>
+                      <div className="text-xs text-blue-700 mt-1">
+                        We're currently collecting data - check back soon!
+                      </div>
                     </div>
                   </div>
-                  
-                  <div className="text-center text-sm text-gray-600">
-                    Growth over {growthData.period}
-                  </div>
-                </>
-              ) : (
-                <div className="text-center py-6">
-                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <span className="text-gray-400 text-2xl">📊</span>
-                  </div>
-                  <h4 className="text-lg font-semibold text-gray-900 mb-2">Not Enough Data Yet</h4>
-                  <p className="text-gray-600 text-sm mb-4">
-                    We need {growthTimeFrame === 'weekly' ? '7' : '30'} days of data to calculate accurate {growthTimeFrame} growth rates.
-                  </p>
-                  <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
-                    <div className="text-sm font-medium text-blue-900">
-                      {growthData.label} available in {growthData.daysUntil} days
-                    </div>
-                    <div className="text-xs text-blue-700 mt-1">
-                      We're currently collecting data - check back soon!
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            </ViewTracker>
 
             {/* Real Profile Performance (only show if we have real data) */}
             {instagramData?.accountInsights && (
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="mr-2">👁️</span>
-                  Profile Performance ({growthTimeFrame === 'weekly' ? 'Last 7 Days' : 'Last 30 Days'})
-                </h3>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  {instagramData.accountInsights.profile_visits > 0 && (
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-blue-600 mb-1">
-                        {/* Show scaled data based on timeframe */}
-                        {growthTimeFrame === 'weekly' ? 
-                          Math.round(instagramData.accountInsights.profile_visits * (7/30)).toLocaleString() :
-                          instagramData.accountInsights.profile_visits.toLocaleString()
-                        }
-                      </div>
-                      <div className="text-sm text-gray-600">Profile Visits</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {growthTimeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
-                      </div>
-                    </div>
-                  )}
+              <ViewTracker
+                featureName="profile_performance_insights"
+                metadata={{
+                  profile_visits: instagramData.accountInsights.profile_visits,
+                  reach: instagramData.accountInsights.reach
+                }}
+              >
+                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                  <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                    <span className="mr-2">👁️</span>
+                    Profile Performance ({growthTimeFrame === 'weekly' ? 'Last 7 Days' : 'Last 30 Days'})
+                  </h3>
                   
-                  {instagramData.accountInsights.reach > 0 && (
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-emerald-600 mb-1">
-                        {/* Show scaled data based on timeframe */}
-                        {growthTimeFrame === 'weekly' ? 
-                          ((instagramData.accountInsights.reach * (7/30)) / 1000).toFixed(1) + 'K' :
-                          (instagramData.accountInsights.reach / 1000).toFixed(1) + 'K'
-                        }
+                  <div className="grid grid-cols-2 gap-4">
+                    {instagramData.accountInsights.profile_visits > 0 && (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-600 mb-1">
+                          {/* Show scaled data based on timeframe */}
+                          {growthTimeFrame === 'weekly' ? 
+                            Math.round(instagramData.accountInsights.profile_visits * (7/30)).toLocaleString() :
+                            instagramData.accountInsights.profile_visits.toLocaleString()
+                          }
+                        </div>
+                        <div className="text-sm text-gray-600">Profile Visits</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {growthTimeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                        </div>
                       </div>
-                      <div className="text-sm text-gray-600">Total Reach</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {growthTimeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                    )}
+                    
+                    {instagramData.accountInsights.reach > 0 && (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-emerald-600 mb-1">
+                          {/* Show scaled data based on timeframe */}
+                          {growthTimeFrame === 'weekly' ? 
+                            ((instagramData.accountInsights.reach * (7/30)) / 1000).toFixed(1) + 'K' :
+                            (instagramData.accountInsights.reach / 1000).toFixed(1) + 'K'
+                          }
+                        </div>
+                        <div className="text-sm text-gray-600">Total Reach</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {growthTimeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
+              </ViewTracker>
             )}
 
             {/* Follower History Bar Chart - Vertical Bars */}
             {chartData.length > 0 && (
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="mr-2">📊</span>
-                  Follower History ({growthTimeFrame === 'weekly' ? 'Last 4 Weeks' : 'Last 6 Months'})
-                </h3>
-                
-                {/* Vertical Bar Chart */}
-                <div className="relative">
-                  {/* Y-axis labels (follower counts) */}
-                  <div className="flex items-end justify-between h-40 mb-3">
-                    {chartData.map((dataPoint, index) => {
-                      const height = maxFollowers > 0 ? (dataPoint.followers / maxFollowers) * 100 : 0;
-                      return (
-                        <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/chartData.length}%` }}>
-                          {/* Follower count label */}
-                          <div className="text-xs font-bold text-gray-900 mb-1">
-                            {dataPoint.followers >= 1000 ? 
-                              `${(dataPoint.followers / 1000).toFixed(1)}K` : 
-                              dataPoint.followers.toLocaleString()
-                            }
+              <ViewTracker
+                featureName="growth_history_chart"
+                metadata={{
+                  timeframe: growthTimeFrame,
+                  data_points: chartData.length,
+                  current_followers: instagramData?.followers || 0
+                }}
+              >
+                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                  <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                    <span className="mr-2">📊</span>
+                    Follower History ({growthTimeFrame === 'weekly' ? 'Last 4 Weeks' : 'Last 6 Months'})
+                  </h3>
+                  
+                  {/* Vertical Bar Chart */}
+                  <div className="relative">
+                    {/* Y-axis labels (follower counts) */}
+                    <div className="flex items-end justify-between h-40 mb-3">
+                      {chartData.map((dataPoint, index) => {
+                        const height = maxFollowers > 0 ? (dataPoint.followers / maxFollowers) * 100 : 0;
+                        return (
+                          <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/chartData.length}%` }}>
+                            {/* Follower count label */}
+                            <div className="text-xs font-bold text-gray-900 mb-1">
+                              {dataPoint.followers >= 1000 ? 
+                                `${(dataPoint.followers / 1000).toFixed(1)}K` : 
+                                dataPoint.followers.toLocaleString()
+                              }
+                            </div>
+                            
+                            {/* Vertical bar */}
+                            <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
+                              <div 
+                                className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
+                                  dataPoint.isCurrentPeriod 
+                                    ? 'bg-gradient-to-t from-emerald-400 to-emerald-600' 
+                                    : 'bg-gradient-to-t from-emerald-300 to-emerald-500'
+                                }`}
+                                style={{ height: `${Math.max(height, 8)}%` }}
+                              />
+                              {dataPoint.isCurrentPeriod && (
+                                <div className="absolute bottom-0 w-full bg-gradient-to-t from-emerald-400 to-emerald-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
+                              )}
+                            </div>
                           </div>
-                          
-                          {/* Vertical bar */}
-                          <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
-                            <div 
-                              className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
-                                dataPoint.isCurrentPeriod 
-                                  ? 'bg-gradient-to-t from-emerald-400 to-emerald-600' 
-                                  : 'bg-gradient-to-t from-emerald-300 to-emerald-500'
-                              }`}
-                              style={{ height: `${Math.max(height, 8)}%` }}
-                            />
-                            {dataPoint.isCurrentPeriod && (
-                              <div className="absolute bottom-0 w-full bg-gradient-to-t from-emerald-400 to-emerald-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
-                            )}
-                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    {/* X-axis labels (time periods) */}
+                    <div className="flex justify-between border-t border-gray-200 pt-2">
+                      {chartData.map((dataPoint, index) => (
+                        <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/chartData.length}%` }}>
+                          {dataPoint.label}
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
                   
-                  {/* X-axis labels (time periods) */}
-                  <div className="flex justify-between border-t border-gray-200 pt-2">
-                    {chartData.map((dataPoint, index) => (
-                      <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/chartData.length}%` }}>
-                        {dataPoint.label}
-                      </div>
-                    ))}
+                  <div className="mt-4 text-xs text-gray-500 text-center">
+                    {growthTimeFrame === 'weekly' ? 
+                      'Current week updates daily until Sunday' : 
+                      'Current month updates daily until month end'
+                    }
                   </div>
                 </div>
-                
-                <div className="mt-4 text-xs text-gray-500 text-center">
-                  {growthTimeFrame === 'weekly' ? 
-                    'Current week updates daily until Sunday' : 
-                    'Current month updates daily until month end'
-                  }
-                </div>
-              </div>
+              </ViewTracker>
             )}
 
             {/* Data Collection Status */}
@@ -1839,12 +2095,17 @@ const SocialSageMobile = () => {
       return (
         <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-blue-50 to-purple-50">
           <div className="bg-white/95 backdrop-blur-sm border-b border-blue-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <button 
-              onClick={() => setSelectedMetricCategory(null)}
-              className="mr-3 text-blue-600 font-medium"
+            <ClickTracker
+              featureName="engagement_metrics_back"
+              metadata={{ engagement_rate: engagementMetrics.engagementRate }}
             >
-              ← Back
-            </button>
+              <button 
+                onClick={() => setSelectedMetricCategory(null)}
+                className="mr-3 text-blue-600 font-medium"
+              >
+                ← Back
+              </button>
+            </ClickTracker>
             <div className="flex items-center">
               <span className="mr-2">💬</span>
               <h1 className="text-xl font-bold text-gray-900">Engagement Metrics</h1>
@@ -1860,163 +2121,188 @@ const SocialSageMobile = () => {
             </div>
 
             {/* Main Engagement Rate Circle */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-white/50 shadow-sm mb-6 text-center">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center justify-center">
-                <span className="mr-2">🎯</span>
-                Overall Engagement Rate
-              </h3>
-              
-              <div className="relative w-32 h-32 mx-auto mb-4">
-                <div className="absolute inset-0 rounded-full border-8 border-gray-200"></div>
-                <div 
-                  className="absolute inset-0 rounded-full border-8 border-blue-500 transition-all duration-1000"
-                  style={{
-                    clipPath: `polygon(50% 50%, 50% 0%, ${
-                      50 + 50 * Math.cos((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
-                    }% ${
-                      50 - 50 * Math.sin((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
-                    }%, 50% 50%)`
-                  }}
-                ></div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div>
-                    <div className="text-2xl font-bold text-blue-600">
-                      {engagementMetrics.engagementRate}
+            <ViewTracker
+              featureName="engagement_rate_circle"
+              metadata={{
+                engagement_rate: engagementMetrics.engagementRate,
+                avg_likes: engagementMetrics.avgLikes,
+                avg_comments: engagementMetrics.avgComments
+              }}
+            >
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-white/50 shadow-sm mb-6 text-center">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center justify-center">
+                  <span className="mr-2">🎯</span>
+                  Overall Engagement Rate
+                </h3>
+                
+                <div className="relative w-32 h-32 mx-auto mb-4">
+                  <div className="absolute inset-0 rounded-full border-8 border-gray-200"></div>
+                  <div 
+                    className="absolute inset-0 rounded-full border-8 border-blue-500 transition-all duration-1000"
+                    style={{
+                      clipPath: `polygon(50% 50%, 50% 0%, ${
+                        50 + 50 * Math.cos((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
+                      }% ${
+                        50 - 50 * Math.sin((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
+                      }%, 50% 50%)`
+                    }}
+                  ></div>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div>
+                      <div className="text-2xl font-bold text-blue-600">
+                        {engagementMetrics.engagementRate}
+                      </div>
+                      <div className="text-xs text-gray-600">Engagement</div>
                     </div>
-                    <div className="text-xs text-gray-600">Engagement</div>
                   </div>
                 </div>
+                
+                <div className="text-sm text-gray-600">
+                  Based on posts from the last 30 days
+                </div>
               </div>
-              
-              <div className="text-sm text-gray-600">
-                Based on posts from the last 30 days
-              </div>
-            </div>
+            </ViewTracker>
 
             {/* Engagement Breakdown */}
-            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                <span className="mr-2">📊</span>
-                Engagement Breakdown (Last 30 Days)
-              </h3>
-              
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <Heart className="w-5 h-5 text-red-500" />
-                    <span className="text-sm font-medium text-gray-700">Avg Likes per Post</span>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-lg font-bold text-gray-900">
-                      {engagementMetrics.avgLikes.toLocaleString()}
+            <ViewTracker
+              featureName="engagement_breakdown"
+              metadata={{
+                total_metrics: 4,
+                has_reach_data: engagementMetrics.avgReach > 0
+              }}
+            >
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">📊</span>
+                  Engagement Breakdown (Last 30 Days)
+                </h3>
+                
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <Heart className="w-5 h-5 text-red-500" />
+                      <span className="text-sm font-medium text-gray-700">Avg Likes per Post</span>
                     </div>
-                    <div className="w-16 bg-gray-200 rounded-full h-2">
-                      <div className="bg-gradient-to-r from-red-400 to-pink-500 h-2 rounded-full" style={{width: '80%'}}></div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-gray-900">
+                        {engagementMetrics.avgLikes.toLocaleString()}
+                      </div>
+                      <div className="w-16 bg-gray-200 rounded-full h-2">
+                        <div className="bg-gradient-to-r from-red-400 to-pink-500 h-2 rounded-full" style={{width: '80%'}}></div>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <MessageCircle className="w-5 h-5 text-blue-500" />
-                    <span className="text-sm font-medium text-gray-700">Avg Comments per Post</span>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-lg font-bold text-gray-900">
-                      {engagementMetrics.avgComments.toLocaleString()}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <MessageCircle className="w-5 h-5 text-blue-500" />
+                      <span className="text-sm font-medium text-gray-700">Avg Comments per Post</span>
                     </div>
-                    <div className="w-16 bg-gray-200 rounded-full h-2">
-                      <div className="bg-gradient-to-r from-blue-400 to-blue-600 h-2 rounded-full" style={{width: '65%'}}></div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-gray-900">
+                        {engagementMetrics.avgComments.toLocaleString()}
+                      </div>
+                      <div className="w-16 bg-gray-200 rounded-full h-2">
+                        <div className="bg-gradient-to-r from-blue-400 to-blue-600 h-2 rounded-full" style={{width: '65%'}}></div>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <TrendingUp className="w-5 h-5 text-green-500" />
-                    <span className="text-sm font-medium text-gray-700">Avg Reach per Post</span>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-lg font-bold text-gray-900">
-                      {engagementMetrics.avgReach > 0 ? engagementMetrics.avgReach.toLocaleString() : '--'}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <TrendingUp className="w-5 h-5 text-green-500" />
+                      <span className="text-sm font-medium text-gray-700">Avg Reach per Post</span>
                     </div>
-                    <div className="w-16 bg-gray-200 rounded-full h-2">
-                      <div className="bg-gradient-to-r from-green-400 to-emerald-500 h-2 rounded-full" style={{width: '70%'}}></div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-gray-900">
+                        {engagementMetrics.avgReach > 0 ? engagementMetrics.avgReach.toLocaleString() : '--'}
+                      </div>
+                      <div className="w-16 bg-gray-200 rounded-full h-2">
+                        <div className="bg-gradient-to-r from-green-400 to-emerald-500 h-2 rounded-full" style={{width: '70%'}}></div>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <Share className="w-5 h-5 text-purple-500" />
-                    <span className="text-sm font-medium text-gray-700">Avg Shares per Post</span>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-lg font-bold text-gray-900">
-                      {engagementMetrics.avgShares.toLocaleString()}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <Share className="w-5 h-5 text-purple-500" />
+                      <span className="text-sm font-medium text-gray-700">Avg Shares per Post</span>
                     </div>
-                    <div className="w-16 bg-gray-200 rounded-full h-2">
-                      <div className="bg-gradient-to-r from-purple-400 to-purple-600 h-2 rounded-full" style={{width: '55%'}}></div>
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-gray-900">
+                        {engagementMetrics.avgShares.toLocaleString()}
+                      </div>
+                      <div className="w-16 bg-gray-200 rounded-full h-2">
+                        <div className="bg-gradient-to-r from-purple-400 to-purple-600 h-2 rounded-full" style={{width: '55%'}}></div>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </ViewTracker>
 
             {/* Engagement Rate History Bar Chart */}
             {engagementHistory.length > 0 && (
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="mr-2">📈</span>
-                  Engagement Rate History (Last 6 Months)
-                </h3>
-                
-                {/* Vertical Bar Chart */}
-                <div className="relative">
-                  {/* Y-axis labels (engagement rates) */}
-                  <div className="flex items-end justify-between h-40 mb-3">
-                    {engagementHistory.map((dataPoint, index) => {
-                      const height = maxEngagementRate > 0 ? (dataPoint.engagementRate / maxEngagementRate) * 100 : 0;
-                      return (
-                        <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/engagementHistory.length}%` }}>
-                          {/* Engagement rate label */}
-                          <div className="text-xs font-bold text-gray-900 mb-1">
-                            {dataPoint.engagementRate > 0 ? `${dataPoint.engagementRate.toFixed(1)}%` : '--'}
+              <ViewTracker
+                featureName="engagement_history_chart"
+                metadata={{
+                  months_analyzed: engagementHistory.length,
+                  max_rate: maxEngagementRate
+                }}
+              >
+                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                  <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                    <span className="mr-2">📈</span>
+                    Engagement Rate History (Last 6 Months)
+                  </h3>
+                  
+                  {/* Vertical Bar Chart */}
+                  <div className="relative">
+                    {/* Y-axis labels (engagement rates) */}
+                    <div className="flex items-end justify-between h-40 mb-3">
+                      {engagementHistory.map((dataPoint, index) => {
+                        const height = maxEngagementRate > 0 ? (dataPoint.engagementRate / maxEngagementRate) * 100 : 0;
+                        return (
+                          <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/engagementHistory.length}%` }}>
+                            {/* Engagement rate label */}
+                            <div className="text-xs font-bold text-gray-900 mb-1">
+                              {dataPoint.engagementRate > 0 ? `${dataPoint.engagementRate.toFixed(1)}%` : '--'}
+                            </div>
+                            
+                            {/* Vertical bar */}
+                            <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
+                              <div 
+                                className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
+                                  dataPoint.isCurrentPeriod 
+                                    ? 'bg-gradient-to-t from-blue-400 to-blue-600' 
+                                    : 'bg-gradient-to-t from-blue-300 to-blue-500'
+                                }`}
+                                style={{ height: `${Math.max(height, 8)}%` }}
+                              />
+                              {dataPoint.isCurrentPeriod && (
+                                <div className="absolute bottom-0 w-full bg-gradient-to-t from-blue-400 to-blue-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
+                              )}
+                            </div>
                           </div>
-                          
-                          {/* Vertical bar */}
-                          <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
-                            <div 
-                              className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
-                                dataPoint.isCurrentPeriod 
-                                  ? 'bg-gradient-to-t from-blue-400 to-blue-600' 
-                                  : 'bg-gradient-to-t from-blue-300 to-blue-500'
-                              }`}
-                              style={{ height: `${Math.max(height, 8)}%` }}
-                            />
-                            {dataPoint.isCurrentPeriod && (
-                              <div className="absolute bottom-0 w-full bg-gradient-to-t from-blue-400 to-blue-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
-                            )}
-                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    {/* X-axis labels (months) */}
+                    <div className="flex justify-between border-t border-gray-200 pt-2">
+                      {engagementHistory.map((dataPoint, index) => (
+                        <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/engagementHistory.length}%` }}>
+                          {dataPoint.label}
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
                   
-                  {/* X-axis labels (months) */}
-                  <div className="flex justify-between border-t border-gray-200 pt-2">
-                    {engagementHistory.map((dataPoint, index) => (
-                      <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/engagementHistory.length}%` }}>
-                        {dataPoint.label}
-                      </div>
-                    ))}
+                  <div className="mt-4 text-xs text-gray-500 text-center">
+                    Current month updates daily until month end
                   </div>
                 </div>
-                
-                <div className="mt-4 text-xs text-gray-500 text-center">
-                  Current month updates daily until month end
-                </div>
-              </div>
+              </ViewTracker>
             )}
           </div>
         </div>
@@ -2027,12 +2313,17 @@ const SocialSageMobile = () => {
     return (
       <div className="min-h-screen pb-20 overflow-y-auto bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center sticky top-0 z-10">
-          <button 
-            onClick={() => setSelectedMetricCategory(null)}
-            className="mr-3 text-blue-500 font-medium"
+          <ClickTracker
+            featureName="generic_metric_back"
+            metadata={{ category_id: category.id }}
           >
-            ← Back
-          </button>
+            <button 
+              onClick={() => setSelectedMetricCategory(null)}
+              className="mr-3 text-blue-500 font-medium"
+            >
+              ← Back
+            </button>
+          </ClickTracker>
           <div className="flex items-center">
             <span className="mr-2">{category.emoji}</span>
             <h1 className="text-xl font-bold text-gray-900">{category.title}</h1>
@@ -2047,30 +2338,40 @@ const SocialSageMobile = () => {
 
           <div className="space-y-3">
             {category.metrics.map((metric, index) => (
-              <div key={index} className="bg-white rounded-lg p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-semibold text-gray-900">{metric.name}</h3>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-lg font-bold text-gray-900">{metric.value}</span>
-                    <div className={`w-2 h-2 rounded-full ${
-                      metric.trend === 'up' ? 'bg-green-500' : 
-                      metric.trend === 'down' ? 'bg-red-500' : 'bg-gray-400'
-                    }`}></div>
+              <ViewTracker
+                key={index}
+                featureName={`generic_metric_${metric.name.toLowerCase().replace(/\s+/g, '_')}`}
+                metadata={{ 
+                  category: category.id,
+                  metric_value: metric.value,
+                  trend: metric.trend
+                }}
+              >
+                <div className="bg-white rounded-lg p-4 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-semibold text-gray-900">{metric.name}</h3>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-lg font-bold text-gray-900">{metric.value}</span>
+                      <div className={`w-2 h-2 rounded-full ${
+                        metric.trend === 'up' ? 'bg-green-500' : 
+                        metric.trend === 'down' ? 'bg-red-500' : 'bg-gray-400'
+                      }`}></div>
+                    </div>
+                  </div>
+                  {metric.detail && (
+                    <div className="text-xs text-gray-500 mb-2">{metric.detail}</div>
+                  )}
+                  <div className="h-12 bg-gray-50 rounded-md flex items-center justify-center">
+                    <TrendingUp className={`w-6 h-6 ${
+                      metric.trend === 'up' ? 'text-green-500' : 
+                      metric.trend === 'down' ? 'text-red-500' : 'text-gray-400'
+                    }`} />
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    {timeFrame.charAt(0).toUpperCase() + timeFrame.slice(1)} performance
                   </div>
                 </div>
-                {metric.detail && (
-                  <div className="text-xs text-gray-500 mb-2">{metric.detail}</div>
-                )}
-                <div className="h-12 bg-gray-50 rounded-md flex items-center justify-center">
-                  <TrendingUp className={`w-6 h-6 ${
-                    metric.trend === 'up' ? 'text-green-500' : 
-                    metric.trend === 'down' ? 'text-red-500' : 'text-gray-400'
-                  }`} />
-                </div>
-                <div className="mt-2 text-xs text-gray-500">
-                  {timeFrame.charAt(0).toUpperCase() + timeFrame.slice(1)} performance
-                </div>
-              </div>
+              </ViewTracker>
             ))}
           </div>
 
@@ -2193,12 +2494,17 @@ const SocialSageMobile = () => {
         <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200/50 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
           <h1 className="text-xl font-bold text-gray-900">SocialSage</h1>
           <div className="flex items-center space-x-2">
-            <button 
-              onClick={handleLogout}
-              className="text-sm text-red-600 hover:text-red-700 px-2 py-1 rounded"
+            <ClickTracker
+              featureName="logout_button"
+              metadata={{ session_length: Date.now() - performance.timing?.navigationStart }}
             >
-              Logout
-            </button>
+              <button 
+                onClick={handleLogout}
+                className="text-sm text-red-600 hover:text-red-700 px-2 py-1 rounded"
+              >
+                Logout
+              </button>
+            </ClickTracker>
             <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
               <Plus className="w-4 h-4 text-white" />
             </div>
@@ -2225,95 +2531,132 @@ const SocialSageMobile = () => {
         )}
 
         <div className="p-4 bg-gradient-to-br from-blue-50 to-purple-50">
-          <div className="flex bg-white/80 backdrop-blur-sm rounded-2xl p-1 shadow-sm border border-white/50">
-            {[
-              { key: 'weekly' as TimeFrame, label: 'Weekly' },
-              { key: 'monthly' as TimeFrame, label: 'Monthly' }
-            ].map((period) => (
-              <button
-                key={period.key}
-                onClick={() => setTimeFrame(period.key)}
-                className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all ${
-                  timeFrame === period.key
-                    ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                {period.label}
-              </button>
-            ))}
-          </div>
+          <ClickTracker
+            featureName="timeframe_selector"
+            metadata={{ current_timeframe: timeFrame }}
+          >
+            <div className="flex bg-white/80 backdrop-blur-sm rounded-2xl p-1 shadow-sm border border-white/50">
+              {[
+                { key: 'weekly' as TimeFrame, label: 'Weekly' },
+                { key: 'monthly' as TimeFrame, label: 'Monthly' }
+              ].map((period) => (
+                <button
+                  key={period.key}
+                  onClick={() => handleTimeFrameChange(period.key)}
+                  className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all ${
+                    timeFrame === period.key
+                      ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {period.label}
+                </button>
+              ))}
+            </div>
+          </ClickTracker>
         </div>
 
         <div className="px-4 pb-4 bg-gradient-to-br from-blue-50 to-purple-50">
           <div className="grid grid-cols-2 gap-3">
-            <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
-              <div className="text-xl font-bold text-blue-600">
-                {instagramData ? instagramData.followers.toLocaleString() : '0'}
+            <ViewTracker
+              featureName="total_followers_metric"
+              metadata={{ followers: instagramData?.followers || 0 }}
+            >
+              <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
+                <div className="text-xl font-bold text-blue-600">
+                  {instagramData ? instagramData.followers.toLocaleString() : '0'}
+                </div>
+                <div className="text-xs text-gray-600">Total Followers</div>
               </div>
-              <div className="text-xs text-gray-600">Total Followers</div>
-            </div>
-            <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
-              {timeFrame === 'weekly' ? (
-                <>
-                  {instagramData?.growthData?.canCalculateWeekly ? (
-                    <>
-                      <div className="text-xl font-bold text-emerald-600">
-                        {instagramData.growthRate}
-                      </div>
-                      <div className="text-xs text-gray-600">Weekly Growth</div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-xl font-bold text-gray-400">--</div>
-                      <div className="text-xs text-gray-500">
-                        Available in {instagramData?.growthData?.daysUntilWeekly || 7}d
-                      </div>
-                    </>
-                  )}
-                </>
-              ) : (
-                <>
-                  {instagramData?.growthData?.canCalculateMonthly ? (
-                    <>
-                      <div className="text-xl font-bold text-emerald-600">
-                        {instagramData.monthlyGrowth}
-                      </div>
-                      <div className="text-xs text-gray-600">Monthly Growth</div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-xl font-bold text-gray-400">--</div>
-                      <div className="text-xs text-gray-500">
-                        Available in {instagramData?.growthData?.daysUntilMonthly || 30}d
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-            <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
-              <div className="text-xl font-bold text-purple-600">
-                {metrics.engagement}
+            </ViewTracker>
+            
+            <ViewTracker
+              featureName="growth_rate_metric"
+              metadata={{ 
+                timeframe: timeFrame,
+                has_data: timeFrame === 'weekly' ? instagramData?.growthData?.canCalculateWeekly : instagramData?.growthData?.canCalculateMonthly
+              }}
+            >
+              <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
+                {timeFrame === 'weekly' ? (
+                  <>
+                    {instagramData?.growthData?.canCalculateWeekly ? (
+                      <>
+                        <div className="text-xl font-bold text-emerald-600">
+                          {instagramData.growthRate}
+                        </div>
+                        <div className="text-xs text-gray-600">Weekly Growth</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-xl font-bold text-gray-400">--</div>
+                        <div className="text-xs text-gray-500">
+                          Available in {instagramData?.growthData?.daysUntilWeekly || 7}d
+                        </div>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {instagramData?.growthData?.canCalculateMonthly ? (
+                      <>
+                        <div className="text-xl font-bold text-emerald-600">
+                          {instagramData.monthlyGrowth}
+                        </div>
+                        <div className="text-xs text-gray-600">Monthly Growth</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-xl font-bold text-gray-400">--</div>
+                        <div className="text-xs text-gray-500">
+                          Available in {instagramData?.growthData?.daysUntilMonthly || 30}d
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
-              <div className="text-xs text-gray-600">
-                Engagement Rate
+            </ViewTracker>
+            
+            <ViewTracker
+              featureName="engagement_rate_metric"
+              metadata={{ 
+                engagement_rate: metrics.engagement,
+                timeframe: timeFrame
+              }}
+            >
+              <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
+                <div className="text-xl font-bold text-purple-600">
+                  {metrics.engagement}
+                </div>
+                <div className="text-xs text-gray-600">
+                  Engagement Rate
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {timeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                </div>
               </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {timeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+            </ViewTracker>
+            
+            <ViewTracker
+              featureName="avg_reach_metric"
+              metadata={{ 
+                reach: metrics.reach,
+                timeframe: timeFrame
+              }}
+            >
+              <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
+                <div className="text-xl font-bold text-orange-600">
+                  {metrics.reach}
+                </div>
+                <div className="text-xs text-gray-600">
+                  Avg Reach Per Post
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {timeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
+                </div>
               </div>
-            </div>
-            <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl p-4 shadow-sm border border-white/20">
-              <div className="text-xl font-bold text-orange-600">
-                {metrics.reach}
-              </div>
-              <div className="text-xs text-gray-600">
-                Avg Reach Per Post
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {timeFrame === 'weekly' ? 'Last 7 days' : 'Last 30 days'}
-              </div>
-            </div>
+            </ViewTracker>
           </div>
         </div>
 
@@ -2330,18 +2673,40 @@ const SocialSageMobile = () => {
                 'bg-gradient-to-br from-violet-100 to-purple-100 border-violet-200'
               ];
               return (
-                <button
-                  key={category.id}
-                  onClick={() => setSelectedMetricCategory(category.id)}
-                  className={`${cardColors[index]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all text-left hover:scale-105 transform duration-200`}
-                >
-                  <div className={`w-12 h-12 bg-gradient-to-r ${category.color} rounded-2xl flex items-center justify-center mb-3 shadow-sm`}>
-                    <span className="text-2xl">{category.emoji}</span>
-                  </div>
-                  <h3 className="font-semibold text-gray-900 text-sm mb-1">{category.title}</h3>
-                  <p className="text-xs text-gray-700 leading-relaxed mb-2">{category.description}</p>
-                  <div className="text-xs text-blue-700 font-medium">View Details →</div>
-                </button>
+                <div className="h-full">
+  <ViewTracker
+    key={category.id}
+    featureName={`metric_category_${category.id}_viewed`}
+    metadata={{ 
+      category_title: category.title,
+      has_instagram_data: !!instagramData
+    }}
+  >
+    <ClickTracker
+      featureName={`metric_category_${category.id}`}
+      metadata={{ 
+        category_title: category.title,
+        has_data: !!instagramData,
+        metrics_count: category.metrics.length,
+        user_followers: instagramData?.followers || 0
+      }}
+    >
+      <button
+        onClick={() => handleMetricCategorySelect(category.id)}
+        className={`${cardColors[index]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all text-left hover:scale-105 transform duration-200 h-full flex flex-col w-full`}
+      >
+        <div className={`w-12 h-12 bg-gradient-to-r ${category.color} rounded-2xl flex items-center justify-center mb-3 shadow-sm flex-shrink-0`}>
+          <span className="text-2xl">{category.emoji}</span>
+        </div>
+        <div className="flex-1 flex flex-col">
+          <h3 className="font-semibold text-gray-900 text-sm mb-1">{category.title}</h3>
+          <p className="text-xs text-gray-700 leading-relaxed mb-2 flex-1">{category.description}</p>
+          <div className="text-xs text-blue-700 font-medium mt-auto">View Details →</div>
+        </div>
+      </button>
+    </ClickTracker>
+  </ViewTracker>
+</div>
               );
             })}
           </div>
@@ -2353,6 +2718,26 @@ const SocialSageMobile = () => {
   const PostsContent = () => {
     const [postsView, setPostsView] = useState('recent');
     const [postsTimeFrame, setPostsTimeFrame] = useState<PostsTimeFrame>('weekly');
+
+    // Track posts view changes
+    const handlePostsViewChange = (view: string) => {
+      setPostsView(view)
+      trackFeature('posts_view_change', 'click', {
+        new_view: view,
+        previous_view: postsView,
+        has_instagram_data: !!instagramData
+      })
+    }
+
+    // Track posts timeframe changes
+    const handlePostsTimeFrameChange = (timeframe: PostsTimeFrame) => {
+      setPostsTimeFrame(timeframe)
+      trackFeature('posts_timeframe_change', 'click', {
+        new_timeframe: timeframe,
+        previous_timeframe: postsTimeFrame,
+        posts_view: postsView
+      })
+    }
 
     // Use real posts data if available, otherwise show empty state
     const recentPosts: Post[] = instagramData?.recentPosts?.slice(0, 10).map((post, index) => {
@@ -2462,45 +2847,55 @@ const SocialSageMobile = () => {
         <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
           <h1 className="text-xl font-bold text-gray-900 mb-3">Posts</h1>
           
-          <div className="flex bg-gray-100 rounded-xl p-1 mb-3">
-            {[
-              { key: 'recent', label: 'Recent Posts' },
-              { key: 'top', label: 'Top Posts' }
-            ].map((view) => (
-              <button
-                key={view.key}
-                onClick={() => setPostsView(view.key)}
-                className={`flex-1 py-2.5 px-4 text-sm font-semibold rounded-lg transition-all ${
-                  postsView === view.key
-                    ? 'bg-white text-blue-600 shadow-md'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                {view.label}
-              </button>
-            ))}
-          </div>
-
-          {postsView === 'top' && (
-            <div className="flex bg-blue-50 rounded-lg p-1 border border-blue-200">
+          <ClickTracker
+            featureName="posts_view_toggle"
+            metadata={{ has_posts: !hasNoPosts }}
+          >
+            <div className="flex bg-gray-100 rounded-xl p-1 mb-3">
               {[
-                { key: 'weekly' as PostsTimeFrame, label: 'Week' },
-                { key: 'monthly' as PostsTimeFrame, label: 'Month' },
-                { key: 'annual' as PostsTimeFrame, label: 'Year' }
-              ].map((period) => (
+                { key: 'recent', label: 'Recent Posts' },
+                { key: 'top', label: 'Top Posts' }
+              ].map((view) => (
                 <button
-                  key={period.key}
-                  onClick={() => setPostsTimeFrame(period.key)}
-                  className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
-                    postsTimeFrame === period.key
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-blue-600 hover:text-blue-700'
+                  key={view.key}
+                  onClick={() => handlePostsViewChange(view.key)}
+                  className={`flex-1 py-2.5 px-4 text-sm font-semibold rounded-lg transition-all ${
+                    postsView === view.key
+                      ? 'bg-white text-blue-600 shadow-md'
+                      : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
-                  {period.label}
+                  {view.label}
                 </button>
               ))}
             </div>
+          </ClickTracker>
+
+          {postsView === 'top' && (
+            <ClickTracker
+              featureName="top_posts_timeframe"
+              metadata={{ current_timeframe: postsTimeFrame }}
+            >
+              <div className="flex bg-blue-50 rounded-lg p-1 border border-blue-200">
+                {[
+                  { key: 'weekly' as PostsTimeFrame, label: 'Week' },
+                  { key: 'monthly' as PostsTimeFrame, label: 'Month' },
+                  { key: 'annual' as PostsTimeFrame, label: 'Year' }
+                ].map((period) => (
+                  <button
+                    key={period.key}
+                    onClick={() => handlePostsTimeFrameChange(period.key)}
+                    className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
+                      postsTimeFrame === period.key
+                        ? 'bg-white text-blue-600 shadow-sm'
+                        : 'text-blue-600 hover:text-blue-700'
+                    }`}
+                  >
+                    {period.label}
+                  </button>
+                ))}
+              </div>
+            </ClickTracker>
           )}
         </div>
 
@@ -2537,59 +2932,70 @@ const SocialSageMobile = () => {
                     'bg-gradient-to-br from-gray-50 to-slate-50 border-gray-200'
                   ];
                   return (
-                    <div key={post.id} className={`${cardColors[(post.id - 1) % cardColors.length]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all`}>
-                      <div className="space-y-3">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <h3 className="font-semibold text-gray-900 text-sm leading-tight mb-1">{post.title}</h3>
-                            <div className="flex items-center space-x-2">
-                              <div className={`w-4 h-4 bg-gradient-to-br ${platformIcon.bg} rounded-full flex items-center justify-center`}>
-                                <span className="text-white text-xs font-bold">{platformIcon.text}</span>
+                    <ViewTracker
+                      key={post.id}
+                      featureName={`recent_post_${post.id}`}
+                      metadata={{
+                        post_type: post.type,
+                        performance: post.performance,
+                        likes: post.metrics.likes,
+                        engagement: post.metrics.likes + post.metrics.comments
+                      }}
+                    >
+                      <div className={`${cardColors[(post.id - 1) % cardColors.length]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all`}>
+                        <div className="space-y-3">
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <h3 className="font-semibold text-gray-900 text-sm leading-tight mb-1">{post.title}</h3>
+                              <div className="flex items-center space-x-2">
+                                <div className={`w-4 h-4 bg-gradient-to-br ${platformIcon.bg} rounded-full flex items-center justify-center`}>
+                                  <span className="text-white text-xs font-bold">{platformIcon.text}</span>
+                                </div>
+                                <span className="text-xs text-gray-600 font-medium">{post.type}</span>
+                                <span className="text-xs text-gray-400">•</span>
+                                <span className="text-xs text-gray-500">{post.timestamp}</span>
                               </div>
-                              <span className="text-xs text-gray-600 font-medium">{post.type}</span>
-                              <span className="text-xs text-gray-400">•</span>
-                              <span className="text-xs text-gray-500">{post.timestamp}</span>
+                            </div>
+                            <div className={`px-3 py-1 rounded-full text-xs font-medium border ${getPerformanceColor(post.performance)}`}>
+                              {post.performance}
                             </div>
                           </div>
-                          <div className={`px-3 py-1 rounded-full text-xs font-medium border ${getPerformanceColor(post.performance)}`}>
-                            {post.performance}
-                          </div>
-                        </div>
-                        
-                        <div className="grid grid-cols-5 gap-3 text-center">
-                          <div className="bg-white/60 rounded-lg p-3">
-                            <Heart className="w-4 h-4 text-red-500 mx-auto mb-1" />
-                            <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
-                            <div className="text-xs text-gray-600">Likes</div>
-                          </div>
-                          <div className="bg-white/60 rounded-lg p-3">
-                            <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
-                            <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
-                            <div className="text-xs text-gray-600">Comments</div>
-                          </div>
-                          <div className="bg-white/60 rounded-lg p-3">
-                            <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
-                            <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
-                            <div className="text-xs text-gray-600">Shares</div>
-                          </div>
-                          <div className="bg-white/60 rounded-lg p-3">
-                            <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
-                            <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
-                            <div className="text-xs text-gray-600">Reach</div>
-                          </div>
-                          <div className="bg-white/60 rounded-lg p-3">
-                            <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
-                            <div className="text-sm font-bold text-gray-900">
-                              {post.metrics.reach !== '--' && post.metrics.likes > 0 ? 
-                                `${(((post.metrics.likes + post.metrics.comments) / (parseInt(post.metrics.reach.replace('K', '000').replace('.', '')) || post.metrics.likes + post.metrics.comments)) * 100).toFixed(1)}%` : 
-                                '--'
-                              }
+                          
+                          <div className="grid grid-cols-5 gap-3 text-center">
+                            <div className="bg-white/60 rounded-lg p-3">
+                              <Heart className="w-4 h-4 text-red-500 mx-auto mb-1" />
+                              <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
+                              <div className="text-xs text-gray-600">Likes</div>
                             </div>
-                            <div className="text-xs text-gray-600">Eng Rate</div>
+                            <div className="bg-white/60 rounded-lg p-3">
+                              <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
+                              <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
+                              <div className="text-xs text-gray-600">Comments</div>
+                            </div>
+                            <div className="bg-white/60 rounded-lg p-3">
+                              <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
+                              <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
+                              <div className="text-xs text-gray-600">Shares</div>
+                            </div>
+                            <div className="bg-white/60 rounded-lg p-3">
+                              <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
+                              <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
+                              <div className="text-xs text-gray-600">Reach</div>
+                            </div>
+                            <div className="bg-white/60 rounded-lg p-3">
+                              <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
+                              <div className="text-sm font-bold text-gray-900">
+                                {post.metrics.reach !== '--' && post.metrics.likes > 0 ? 
+                                  `${(((post.metrics.likes + post.metrics.comments) / (parseInt(post.metrics.reach.replace('K', '000').replace('.', '')) || post.metrics.likes + post.metrics.comments)) * 100).toFixed(1)}%` : 
+                                  '--'
+                                }
+                              </div>
+                              <div className="text-xs text-gray-600">Eng Rate</div>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
+                    </ViewTracker>
                   );
                 })
               )}
@@ -2604,63 +3010,74 @@ const SocialSageMobile = () => {
               </div>
               {getTopPosts(postsTimeFrame).length > 0 ? (
                 getTopPosts(postsTimeFrame).map((post, index) => (
-                  <div key={index} className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all">
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-                            <span className="text-white text-xs font-bold">#{index + 1}</span>
-                          </div>
-                          <div>
-                            <h3 className="font-semibold text-gray-900 text-sm mb-1">{post.title}</h3>
-                            <div className="flex items-center space-x-2">
-                              <span className="text-xs text-gray-600 font-medium">{getTypeEmoji(post.type)} {post.type}</span>
-                              <div className="px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r from-yellow-100 to-orange-100 text-orange-700 border border-orange-200">
-                                Top Performer
+                  <ViewTracker
+                    key={index}
+                    featureName={`top_post_${index + 1}`}
+                    metadata={{
+                      timeframe: postsTimeFrame,
+                      post_type: post.type,
+                      ranking: index + 1,
+                      engagement: post.metrics.likes + post.metrics.comments
+                    }}
+                  >
+                    <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200 rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all">
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
+                              <span className="text-white text-xs font-bold">#{index + 1}</span>
+                            </div>
+                            <div>
+                              <h3 className="font-semibold text-gray-900 text-sm mb-1">{post.title}</h3>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs text-gray-600 font-medium">{getTypeEmoji(post.type)} {post.type}</span>
+                                <div className="px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r from-yellow-100 to-orange-100 text-orange-700 border border-orange-200">
+                                  Top Performer
+                                </div>
                               </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                      
-                      <div className="grid grid-cols-5 gap-3 text-center">
-                        <div className="bg-white/70 rounded-lg p-3">
-                          <Heart className="w-4 h-4 text-red-500 mx-auto mb-1" />
-                          <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
-                          <div className="text-xs text-gray-600">Likes</div>
-                        </div>
                         
-                        <div className="bg-white/70 rounded-lg p-3">
-                          <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
-                          <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
-                          <div className="text-xs text-gray-600">Comments</div>
-                        </div>
-                        
-                        <div className="bg-white/70 rounded-lg p-3">
-                          <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
-                          <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
-                          <div className="text-xs text-gray-600">Shares</div>
-                        </div>
-                        
-                        <div className="bg-white/70 rounded-lg p-3">
-                          <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
-                          <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
-                          <div className="text-xs text-gray-600">Reach</div>
-                        </div>
-                        
-                        <div className="bg-white/70 rounded-lg p-3">
-                          <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
-                          <div className="text-sm font-bold text-gray-900">
-                            {post.metrics.reach !== '--' && post.metrics.likes > 0 ? 
-                              `${(((post.metrics.likes + post.metrics.comments) / (parseInt(post.metrics.reach.replace('K', '000').replace('.', '')) || post.metrics.likes + post.metrics.comments)) * 100).toFixed(1)}%` : 
-                              '--'
-                            }
+                        <div className="grid grid-cols-5 gap-3 text-center">
+                          <div className="bg-white/70 rounded-lg p-3">
+                            <Heart className="w-4 h-4 text-red-500 mx-auto mb-1" />
+                            <div className="text-sm font-bold text-gray-900">{post.metrics.likes.toLocaleString()}</div>
+                            <div className="text-xs text-gray-600">Likes</div>
                           </div>
-                          <div className="text-xs text-gray-600">Eng Rate</div>
+                          
+                          <div className="bg-white/70 rounded-lg p-3">
+                            <MessageCircle className="w-4 h-4 text-blue-500 mx-auto mb-1" />
+                            <div className="text-sm font-bold text-gray-900">{post.metrics.comments}</div>
+                            <div className="text-xs text-gray-600">Comments</div>
+                          </div>
+                          
+                          <div className="bg-white/70 rounded-lg p-3">
+                            <Share className="w-4 h-4 text-purple-500 mx-auto mb-1" />
+                            <div className="text-sm font-bold text-gray-900">{post.metrics.shares}</div>
+                            <div className="text-xs text-gray-600">Shares</div>
+                          </div>
+                          
+                          <div className="bg-white/70 rounded-lg p-3">
+                            <TrendingUp className="w-4 h-4 text-green-500 mx-auto mb-1" />
+                            <div className="text-sm font-bold text-gray-900">{post.metrics.reach}</div>
+                            <div className="text-xs text-gray-600">Reach</div>
+                          </div>
+                          
+                          <div className="bg-white/70 rounded-lg p-3">
+                            <BarChart3 className="w-4 h-4 text-orange-500 mx-auto mb-1" />
+                            <div className="text-sm font-bold text-gray-900">
+                              {post.metrics.reach !== '--' && post.metrics.likes > 0 ? 
+                                `${(((post.metrics.likes + post.metrics.comments) / (parseInt(post.metrics.reach.replace('K', '000').replace('.', '')) || post.metrics.likes + post.metrics.comments)) * 100).toFixed(1)}%` : 
+                                '--'
+                              }
+                            </div>
+                            <div className="text-xs text-gray-600">Eng Rate</div>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
+                  </ViewTracker>
                 ))
               ) : (
                 <div className="text-center py-8">
@@ -2693,6 +3110,15 @@ const SocialSageMobile = () => {
     const [selectedAccount, setSelectedAccount] = useState<Account | string>('');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+    // Track AI insights usage
+    useEffect(() => {
+      trackEngagement('ai_insights_opened', {
+        has_instagram_data: !!instagramData,
+        posts_count: instagramData?.recentPosts?.length || 0,
+        followers: instagramData?.followers || 0
+      })
+    }, [])
+
     const metricOptions: MetricOption[] = [
       { value: 'growth', label: 'Follower Growth', description: 'Increase your audience size' },
       { value: 'engagement', label: 'Engagement Rate', description: 'Boost likes, comments, and shares' },
@@ -2711,15 +3137,38 @@ const SocialSageMobile = () => {
     const handleMetricSelect = (metric: string) => {
       setSelectedMetric(metric);
       setChatStep(2);
+      
+      // Track metric selection
+      trackFeature('ai_metric_selection', 'click', {
+        metric_selected: metric,
+        has_instagram_data: !!instagramData
+      })
     };
 
     const handleAccountSelect = (account: Account) => {
       setSelectedAccount(account);
       setIsAnalyzing(true);
       setChatStep(3);
+      
+      // Track account selection and analysis start
+      trackEngagement('ai_analysis_started', {
+        metric_type: selectedMetric,
+        account_platform: account.platform,
+        has_real_data: account.connected,
+        analysis_start_time: new Date().toISOString()
+      })
+      
       setTimeout(() => {
         setIsAnalyzing(false);
         setChatStep(4);
+        
+        // Track analysis completion
+        trackEngagement('ai_analysis_completed', {
+          metric_type: selectedMetric,
+          account_platform: account.platform,
+          analysis_duration: 2000, // 2 seconds
+          recommendations_generated: true
+        })
       }, 2000);
     };
 
@@ -2728,6 +3177,12 @@ const SocialSageMobile = () => {
       setSelectedMetric('');
       setSelectedAccount('');
       setIsAnalyzing(false);
+      
+      // Track AI chat reset
+      trackFeature('ai_chat_reset', 'click', {
+        previous_metric: selectedMetric,
+        chat_step_reached: 4
+      })
     };
 
     const getAIRecommendations = (): AIRecommendation => {
@@ -2939,12 +3394,17 @@ const SocialSageMobile = () => {
               <h1 className="text-xl font-bold text-gray-900">AI Insights</h1>
             </div>
             {chatStep > 1 && (
-              <button 
-                onClick={resetChat} 
-                className="text-sm text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
+              <ClickTracker
+                featureName="ai_chat_new_button"
+                metadata={{ current_step: chatStep, metric: selectedMetric }}
               >
-                New Chat
-              </button>
+                <button 
+                  onClick={resetChat} 
+                  className="text-sm text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
+                >
+                  New Chat
+                </button>
+              </ClickTracker>
             )}
           </div>
         </div>
@@ -2985,18 +3445,26 @@ const SocialSageMobile = () => {
                 {chatStep === 1 && (
                   <div className="grid grid-cols-2 gap-2">
                     {metricOptions.map((option) => (
-                      <button
+                      <ClickTracker
                         key={option.value}
-                        onClick={() => handleMetricSelect(option.value)}
-                        className="text-left p-3 rounded-xl border-2 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all group"
+                        featureName={`ai_metric_option_${option.value}`}
+                        metadata={{
+                          metric_label: option.label,
+                          has_instagram_data: !!instagramData
+                        }}
                       >
-                        <div className="font-medium text-gray-900 text-sm group-hover:text-indigo-700">
-                          {option.label}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1 group-hover:text-indigo-600">
-                          {option.description}
-                        </div>
-                      </button>
+                        <button
+                          onClick={() => handleMetricSelect(option.value)}
+                          className="text-left p-3 rounded-xl border-2 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all group"
+                        >
+                          <div className="font-medium text-gray-900 text-sm group-hover:text-indigo-700">
+                            {option.label}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-1 group-hover:text-indigo-600">
+                            {option.description}
+                          </div>
+                        </button>
+                      </ClickTracker>
                     ))}
                   </div>
                 )}
@@ -3038,39 +3506,48 @@ const SocialSageMobile = () => {
                   {chatStep === 2 && (
                     <div className="space-y-2">
                       {connectedAccounts.map((account, index) => (
-                        <button
+                        <ClickTracker
                           key={index}
-                          onClick={() => account.connected ? handleAccountSelect(account) : null}
-                          disabled={!account.connected}
-                          className={`w-full text-left p-3 rounded-xl border-2 transition-all ${
-                            account.connected 
-                              ? 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 group' 
-                              : 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
-                          }`}
+                          featureName={`ai_account_${account.platform.toLowerCase()}`}
+                          metadata={{
+                            platform: account.platform,
+                            connected: account.connected,
+                            metric_context: selectedMetric
+                          }}
                         >
-                          <div className="flex items-center space-x-3">
-                            <div className={`w-10 h-10 bg-gradient-to-br ${account.color} rounded-full flex items-center justify-center shadow-sm`}>
-                              <span className="text-white text-xs font-bold">
-                                {account.platform === 'Instagram' ? 'IG' : 
-                                 account.platform === 'Twitter/X' ? 'X' : 'IN'}
-                              </span>
-                            </div>
-                            <div className="flex-1">
-                              <div className={`font-medium text-sm ${account.connected ? 'text-gray-900 group-hover:text-indigo-700' : 'text-gray-500'}`}>
-                                {account.platform}
+                          <button
+                            onClick={() => account.connected ? handleAccountSelect(account) : null}
+                            disabled={!account.connected}
+                            className={`w-full text-left p-3 rounded-xl border-2 transition-all ${
+                              account.connected 
+                                ? 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 group' 
+                                : 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-3">
+                              <div className={`w-10 h-10 bg-gradient-to-br ${account.color} rounded-full flex items-center justify-center shadow-sm`}>
+                                <span className="text-white text-xs font-bold">
+                                  {account.platform === 'Instagram' ? 'IG' : 
+                                   account.platform === 'Twitter/X' ? 'X' : 'IN'}
+                                </span>
                               </div>
-                              <div className={`text-xs ${account.connected ? 'text-gray-600 group-hover:text-indigo-600' : 'text-gray-400'}`}>
-                                {account.username}
+                              <div className="flex-1">
+                                <div className={`font-medium text-sm ${account.connected ? 'text-gray-900 group-hover:text-indigo-700' : 'text-gray-500'}`}>
+                                  {account.platform}
+                                </div>
+                                <div className={`text-xs ${account.connected ? 'text-gray-600 group-hover:text-indigo-600' : 'text-gray-400'}`}>
+                                  {account.username}
+                                </div>
                               </div>
+                              {account.connected && (
+                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                              )}
+                              {!account.connected && (
+                                <div className="text-xs text-gray-400">Not connected</div>
+                              )}
                             </div>
-                            {account.connected && (
-                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                            )}
-                            {!account.connected && (
-                              <div className="text-xs text-gray-400">Not connected</div>
-                            )}
-                          </div>
-                        </button>
+                          </button>
+                        </ClickTracker>
                       ))}
                     </div>
                   )}
@@ -3118,73 +3595,114 @@ const SocialSageMobile = () => {
 
             {/* Step 4: Results */}
             {chatStep === 4 && (
-              <div className="flex items-start space-x-3">
-                <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
-                  <span className="text-white text-sm font-bold">AI</span>
-                </div>
-                <div className="bg-white rounded-2xl rounded-tl-sm p-4 shadow-sm border border-indigo-100 flex-1">
-                  {(() => {
-                    const recs = getAIRecommendations();
-                    return (
-                      <div>
-                        <div className="flex items-center space-x-2 mb-4">
-                          <span className="text-lg">🎉</span>
-                          <h3 className="font-bold text-gray-900 text-lg">{recs.title}</h3>
-                        </div>
-                        
-                        {/* Key Insights */}
-                        <div className="mb-6">
-                          <div className="flex items-center space-x-2 mb-3">
-                            <span className="text-base">📊</span>
-                            <h4 className="font-semibold text-gray-800">Key Insights</h4>
+              <ViewTracker
+                featureName="ai_recommendations_display"
+                metadata={{
+                  metric_analyzed: selectedMetric,
+                  has_real_data: !!instagramData,
+                  posts_count: instagramData?.recentPosts?.length || 0
+                }}
+              >
+                <div className="flex items-start space-x-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
+                    <span className="text-white text-sm font-bold">AI</span>
+                  </div>
+                  <div className="bg-white rounded-2xl rounded-tl-sm p-4 shadow-sm border border-indigo-100 flex-1">
+                    {(() => {
+                      const recs = getAIRecommendations();
+                      return (
+                        <div>
+                          <div className="flex items-center space-x-2 mb-4">
+                            <span className="text-lg">🎉</span>
+                            <h3 className="font-bold text-gray-900 text-lg">{recs.title}</h3>
                           </div>
-                          <div className="space-y-3">
-                            {recs.insights.map((insight, index) => (
-                              <div key={index} className="flex items-start space-x-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
-                                <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                                  <span className="text-white text-xs font-bold">{index + 1}</span>
-                                </div>
-                                <p className="text-sm text-blue-800 leading-relaxed">{insight}</p>
-                              </div>
-                            ))}
+                          
+                          {/* Key Insights */}
+                          <div className="mb-6">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <span className="text-base">📊</span>
+                              <h4 className="font-semibold text-gray-800">Key Insights</h4>
+                            </div>
+                            <div className="space-y-3">
+                              {recs.insights.map((insight, index) => (
+                                <ViewTracker
+                                  key={index}
+                                  featureName={`ai_insight_${index + 1}`}
+                                  metadata={{
+                                    metric: selectedMetric,
+                                    insight_index: index + 1
+                                  }}
+                                >
+                                  <div className="flex items-start space-x-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+                                    <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                                      <span className="text-white text-xs font-bold">{index + 1}</span>
+                                    </div>
+                                    <p className="text-sm text-blue-800 leading-relaxed">{insight}</p>
+                                  </div>
+                                </ViewTracker>
+                              ))}
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Action Steps */}
-                        <div className="mb-6">
-                          <div className="flex items-center space-x-2 mb-3">
-                            <span className="text-base">🚀</span>
-                            <h4 className="font-semibold text-gray-800">Action Steps</h4>
+                          {/* Action Steps */}
+                          <div className="mb-6">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <span className="text-base">🚀</span>
+                              <h4 className="font-semibold text-gray-800">Action Steps</h4>
+                            </div>
+                            <div className="space-y-3">
+                              {recs.actions.map((action, index) => (
+                                <ViewTracker
+                                  key={index}
+                                  featureName={`ai_action_${index + 1}`}
+                                  metadata={{
+                                    metric: selectedMetric,
+                                    action_index: index + 1
+                                  }}
+                                >
+                                  <div className="flex items-start space-x-3 p-3 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200">
+                                    <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                                      <span className="text-white text-xs font-bold">✓</span>
+                                    </div>
+                                    <p className="text-sm text-green-800 leading-relaxed">{action}</p>
+                                  </div>
+                                </ViewTracker>
+                              ))}
+                            </div>
                           </div>
-                          <div className="space-y-3">
-                            {recs.actions.map((action, index) => (
-                              <div key={index} className="flex items-start space-x-3 p-3 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200">
-                                <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                                  <span className="text-white text-xs font-bold">✓</span>
-                                </div>
-                                <p className="text-sm text-green-800 leading-relaxed">{action}</p>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
 
-                        {/* Action Buttons */}
-                        <div className="grid grid-cols-2 gap-3">
-                          <button 
-                            onClick={resetChat}
-                            className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl py-3 px-4 font-medium text-sm shadow-sm hover:shadow-md transition-all"
-                          >
-                            New Analysis
-                          </button>
-                          <button className="bg-white border-2 border-indigo-200 text-indigo-600 rounded-xl py-3 px-4 font-medium text-sm hover:bg-indigo-50 transition-all">
-                            Export Report
-                          </button>
+                          {/* Action Buttons */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <ClickTracker
+                              featureName="ai_new_analysis_button"
+                              metadata={{ previous_metric: selectedMetric }}
+                            >
+                              <button 
+                                onClick={resetChat}
+                                className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl py-3 px-4 font-medium text-sm shadow-sm hover:shadow-md transition-all"
+                              >
+                                New Analysis
+                              </button>
+                            </ClickTracker>
+                            <ClickTracker
+                              featureName="ai_export_report_button"
+                              metadata={{ 
+                                metric: selectedMetric,
+                                insights_count: recs.insights.length,
+                                actions_count: recs.actions.length
+                              }}
+                            >
+                              <button className="bg-white border-2 border-indigo-200 text-indigo-600 rounded-xl py-3 px-4 font-medium text-sm hover:bg-indigo-50 transition-all">
+                                Export Report
+                              </button>
+                            </ClickTracker>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })()}
+                      );
+                    })()}
+                  </div>
                 </div>
-              </div>
+              </ViewTracker>
             )}
 
           </div>
@@ -3193,33 +3711,43 @@ const SocialSageMobile = () => {
           <div className="mt-8 pt-6 border-t border-indigo-200">
             <h3 className="font-semibold text-gray-900 mb-3 text-sm">Quick Insights</h3>
             <div className="grid grid-cols-2 gap-3">
-              <button 
-                onClick={() => {
-                  setSelectedMetric('growth');
-                  setChatStep(2);
-                }}
-                className="p-3 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all text-left"
+              <ClickTracker
+                featureName="ai_quick_growth_tips"
+                metadata={{ from_section: 'quick_actions' }}
               >
-                <div className="flex items-center space-x-2 mb-1">
-                  <span className="text-green-500">🚀</span>
-                  <span className="font-medium text-gray-900 text-sm">Growth Tips</span>
-                </div>
-                <p className="text-xs text-gray-600">Boost your followers</p>
-              </button>
+                <button 
+                  onClick={() => {
+                    setSelectedMetric('growth');
+                    setChatStep(2);
+                  }}
+                  className="p-3 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all text-left"
+                >
+                  <div className="flex items-center space-x-2 mb-1">
+                    <span className="text-green-500">🚀</span>
+                    <span className="font-medium text-gray-900 text-sm">Growth Tips</span>
+                  </div>
+                  <p className="text-xs text-gray-600">Boost your followers</p>
+                </button>
+              </ClickTracker>
               
-              <button 
-                onClick={() => {
-                  setSelectedMetric('timing');
-                  setChatStep(2);
-                }}
-                className="p-3 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all text-left"
+              <ClickTracker
+                featureName="ai_quick_timing_tips"
+                metadata={{ from_section: 'quick_actions' }}
               >
-                <div className="flex items-center space-x-2 mb-1">
-                  <span className="text-purple-500">⏰</span>
-                  <span className="font-medium text-gray-900 text-sm">Best Times</span>
-                </div>
-                <p className="text-xs text-gray-600">When to post</p>
-              </button>
+                <button 
+                  onClick={() => {
+                    setSelectedMetric('timing');
+                    setChatStep(2);
+                  }}
+                  className="p-3 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all text-left"
+                >
+                  <div className="flex items-center space-x-2 mb-1">
+                    <span className="text-purple-500">⏰</span>
+                    <span className="font-medium text-gray-900 text-sm">Best Times</span>
+                  </div>
+                  <p className="text-xs text-gray-600">When to post</p>
+                </button>
+              </ClickTracker>
             </div>
           </div>
         </div>
@@ -3228,6 +3756,14 @@ const SocialSageMobile = () => {
   };
 
   const NotificationsContent = () => {
+    // Track notifications view
+    useEffect(() => {
+      trackFeature('notifications_tab', 'view', {
+        has_instagram_data: !!instagramData,
+        notifications_available: true
+      })
+    }, [])
+
     // Generate dynamic notifications based on real user data
     const generateRealNotifications = () => {
       const notifications = [];
@@ -3388,25 +3924,35 @@ const SocialSageMobile = () => {
         ) : (
           <div className="divide-y divide-gray-100">
             {notifications.map((notification, index) => (
-              <div key={index} className={`p-4 ${notification.bg} hover:bg-opacity-80 transition-colors`}>
-                <div className="flex items-start space-x-3">
-                  <div className={`w-8 h-8 ${notification.icon} rounded-full flex items-center justify-center flex-shrink-0 shadow-sm`}>
-                    <Bell className="w-4 h-4 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <h3 className="font-semibold text-gray-900 text-sm">{notification.type}</h3>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs text-gray-500">{notification.time}</span>
-                        {notification.priority === 'high' && (
-                          <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                        )}
-                      </div>
+              <ViewTracker
+                key={index}
+                featureName={`notification_${notification.type.toLowerCase().replace(/\s+/g, '_')}`}
+                metadata={{
+                  notification_type: notification.type,
+                  priority: notification.priority,
+                  time: notification.time
+                }}
+              >
+                <div className={`p-4 ${notification.bg} hover:bg-opacity-80 transition-colors`}>
+                  <div className="flex items-start space-x-3">
+                    <div className={`w-8 h-8 ${notification.icon} rounded-full flex items-center justify-center flex-shrink-0 shadow-sm`}>
+                      <Bell className="w-4 h-4 text-white" />
                     </div>
-                    <p className="text-gray-700 text-sm mt-1 leading-relaxed">{notification.message}</p>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-semibold text-gray-900 text-sm">{notification.type}</h3>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs text-gray-500">{notification.time}</span>
+                          {notification.priority === 'high' && (
+                            <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-gray-700 text-sm mt-1 leading-relaxed">{notification.message}</p>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </ViewTracker>
             ))}
           </div>
         )}
@@ -3415,18 +3961,34 @@ const SocialSageMobile = () => {
   };
 
   const ProfileContent = () => {
-    const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+    
     const [showAbout, setShowAbout] = useState(false);
     const [showHelpSupport, setShowHelpSupport] = useState(false);
     const [isDisconnectingInstagram, setIsDisconnectingInstagram] = useState(false);
 
-    // Handler for Instagram connect/disconnect
+    // Track profile view
+    useEffect(() => {
+      trackFeature('profile_tab', 'view', {
+        has_instagram_data: !!instagramData,
+        instagram_connected: !!instagramData
+      })
+    }, [])
+
+    // Handler for Instagram connect/disconnect with tracking
     const handleInstagramAuth = async () => {
       if (instagramData) {
         // Disconnect Instagram
         if (isDisconnectingInstagram) return;
         
         setIsDisconnectingInstagram(true);
+        
+        // Track disconnect attempt
+        trackEngagement('instagram_disconnect_attempt', {
+          follower_count: instagramData.followers,
+          posts_count: instagramData.recentPosts?.length || 0,
+          engagement_rate: instagramData.engagementRate
+        })
+        
         try {
           // ✅ FIXED: Get current user ID instead of using instagramData.user_id
           const user = await AuthService.getCurrentUser();
@@ -3438,15 +4000,31 @@ const SocialSageMobile = () => {
           await AuthService.disconnectInstagramAccount(user.id);
           setInstagramData(null);
           alert('Instagram account disconnected successfully!');
+          
+          // Track successful disconnect
+          trackEngagement('instagram_disconnected', {
+            was_connected_duration: 'unknown' // Could track this if you stored connection date
+          })
+          
         } catch (error) {
           console.error('❌ Failed to disconnect Instagram:', error);
           alert('Failed to disconnect Instagram. Please try again.');
+          
+          // Track disconnect failure
+          trackEngagement('instagram_disconnect_failed', {
+            error: error instanceof Error ? error.message : String(error)
+          })
         } finally {
           setIsDisconnectingInstagram(false);
         }
       } else {
         // Connect Instagram
         try {
+          // Track connect attempt
+          trackEngagement('instagram_connect_attempt', {
+            from_profile: true
+          })
+          
           // ✅ FIXED: Actually start the OAuth flow
           const user = await AuthService.getCurrentUser();
           if (!user) {
@@ -3461,200 +4039,185 @@ const SocialSageMobile = () => {
         } catch (error) {
           console.error('❌ Failed to start Instagram connection:', error);
           alert('Failed to connect Instagram. Please try again.');
+          
+          // Track connect failure
+          trackEngagement('instagram_connect_failed', {
+            error: error instanceof Error ? error.message : String(error),
+            from_profile: true
+          })
         }
       }
     };
-
-    const PrivacyPolicyModal = () => (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-2xl p-6 max-w-sm w-full max-h-[80vh] overflow-y-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-gray-900">Privacy Policy</h2>
-            <button 
-              onClick={() => setShowPrivacyPolicy(false)}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              ✕
-            </button>
-          </div>
-          
-          <div className="space-y-4 text-sm text-gray-700">
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Information We Collect</h3>
-              <p>SocialSage collects data from your connected social media accounts to provide analytics and insights. This includes posts, engagement metrics, and follower data.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">How We Use Your Data</h3>
-              <p>We use your data to generate analytics, provide insights, and help you optimize your social media performance. Your data is never shared with third parties.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Data Security</h3>
-              <p>All data is encrypted and stored securely. We follow industry best practices to protect your information.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Account Deletion</h3>
-              <p>You can delete your account and all associated data at any time through the settings menu.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Contact Us</h3>
-              <p>If you have questions about this privacy policy, please contact us at privacy@socialsage.app</p>
-            </div>
-          </div>
-          
-          <button 
-            onClick={() => setShowPrivacyPolicy(false)}
-            className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-colors"
-          >
-            Got It
-          </button>
-        </div>
-      </div>
-    );
-
     const AboutModal = () => (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-2xl p-6 max-w-sm w-full max-h-[80vh] overflow-y-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-gray-900">About SocialSage</h2>
-            <button 
-              onClick={() => setShowAbout(false)}
-              className="text-gray-500 hover:text-gray-700"
-            >
-              ✕
-            </button>
-          </div>
-          
-          <div className="space-y-4 text-sm text-gray-700">
-            <div className="text-center">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg">
-                <span className="text-white text-2xl font-bold">SS</span>
+        <ViewTracker
+          featureName="about_modal"
+          metadata={{ opened_from: 'profile' }}
+        >
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">About SocialSage</h2>
+              <ClickTracker
+                featureName="about_modal_close"
+                metadata={{ read_time: Date.now() }}
+              >
+                <button 
+                  onClick={() => setShowAbout(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </ClickTracker>
+            </div>
+            
+            <div className="space-y-4 text-sm text-gray-700">
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg">
+                  <span className="text-white text-2xl font-bold">SS</span>
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">SocialSage</h3>
+                <p className="text-gray-600 text-sm">AI-Powered Social Media Analytics</p>
               </div>
-              <h3 className="text-lg font-bold text-gray-900">SocialSage</h3>
-              <p className="text-gray-600 text-sm">AI-Powered Social Media Analytics</p>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">App Version</h3>
+                <p>Version 1.3.0 (Build 2025.06.16)</p>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">What's New</h3>
+                <p>This version includes new timing and frequency optimization views, enhanced real-time analytics, and improved AI recommendations based on your actual posting patterns.</p>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">About the Team</h3>
+                <p>Built with ❤️ by the SocialSage team. We're dedicated to empowering creators with data-driven insights to grow their social media presence.</p>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Contact Support</h3>
+                <p>For questions or support, please contact us at support@socialsage.app or follow us @socialsageapp on social media.</p>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Legal</h3>
+                <p>© 2025 SocialSage. All rights reserved. View our Terms of Service and Privacy Policy for more information.</p>
+              </div>
             </div>
             
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">App Version</h3>
-              <p>Version 1.3.0 (Build 2025.06.16)</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">What's New</h3>
-              <p>This version includes new timing and frequency optimization views, enhanced real-time analytics, and improved AI recommendations based on your actual posting patterns.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">About the Team</h3>
-              <p>Built with ❤️ by the SocialSage team. We're dedicated to empowering creators with data-driven insights to grow their social media presence.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Contact Support</h3>
-              <p>For questions or support, please contact us at support@socialsage.app or follow us @socialsageapp on social media.</p>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Legal</h3>
-              <p>© 2025 SocialSage. All rights reserved. View our Terms of Service and Privacy Policy for more information.</p>
-            </div>
+            <ClickTracker
+              featureName="about_modal_acknowledge"
+              metadata={{ modal_open_duration: Date.now() }}
+            >
+              <button 
+                onClick={() => setShowAbout(false)}
+                className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-colors"
+              >
+                Got It
+              </button>
+            </ClickTracker>
           </div>
-          
-          <button 
-            onClick={() => setShowAbout(false)}
-            className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-colors"
-          >
-            Got It
-          </button>
-        </div>
+        </ViewTracker>
       </div>
     );
 
     const HelpSupportModal = () => (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-2xl p-6 max-w-sm w-full max-h-[80vh] overflow-y-auto">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-gray-900">Help & Support</h2>
-            <button 
-              onClick={() => setShowHelpSupport(false)}
-              className="text-gray-500 hover:text-gray-700"
+        <ViewTracker
+          featureName="help_support_modal"
+          metadata={{ opened_from: 'profile' }}
+        >
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">Help & Support</h2>
+              <ClickTracker
+                featureName="help_support_close"
+                metadata={{ read_time: Date.now() }}
+              >
+                <button 
+                  onClick={() => setShowHelpSupport(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </ClickTracker>
+            </div>
+            
+            <div className="space-y-4 text-sm text-gray-700">
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Common Questions</h3>
+                <div className="space-y-2">
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <h4 className="font-medium text-gray-900 mb-1 text-xs">How do I connect Instagram?</h4>
+                    <p className="text-xs">Go to Profile {'>'} Accounts and click "Connect". You need a Business or Creator account.</p>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <h4 className="font-medium text-gray-900 mb-1 text-xs">Why no timing data?</h4>
+                    <p className="text-xs">You need at least 5-10 posts for timing analysis. Keep posting and check back!</p>
+                  </div>
+                  
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <h4 className="font-medium text-gray-900 mb-1 text-xs">How is frequency calculated?</h4>
+                    <p className="text-xs">We analyze your posting history to find the optimal frequency for your audience engagement.</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Quick Fixes</h3>
+                <div className="space-y-1 text-xs">
+                  <p><strong>No data:</strong> Switch to Business/Creator mode</p>
+                  <p><strong>Login issues:</strong> Log out and back in</p>
+                  <p><strong>Slow loading:</strong> Check connection and refresh</p>
+                  <p><strong>Missing insights:</strong> Need more posts for analysis</p>
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Contact Us</h3>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-3 p-2 bg-blue-50 rounded-lg">
+                    <div className="w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center">
+                      <span className="text-white text-xs">✉</span>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 text-xs">Email Support</p>
+                      <p className="text-blue-600 text-xs">support@socialsage.app</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center space-x-3 p-2 bg-gray-50 rounded-lg">
+                    <div className="w-6 h-6 bg-green-600 rounded-full flex items-center justify-center">
+                      <span className="text-white text-xs">💬</span>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 text-xs">Live Chat</p>
+                      <p className="text-gray-600 text-xs">Mon-Fri 9AM-5PM PT</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Getting Started</h3>
+                <p>Connect your Instagram Business account, post regularly, and explore the new Timing and Frequency optimization views for personalized recommendations.</p>
+              </div>
+            </div>
+            
+            <ClickTracker
+              featureName="help_support_acknowledge"
+              metadata={{ modal_open_duration: Date.now() }}
             >
-              ✕
-            </button>
+              <button 
+                onClick={() => setShowHelpSupport(false)}
+                className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-all"
+              >
+                Got It
+              </button>
+            </ClickTracker>
           </div>
-          
-          <div className="space-y-4 text-sm text-gray-700">
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Common Questions</h3>
-              <div className="space-y-2">
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <h4 className="font-medium text-gray-900 mb-1 text-xs">How do I connect Instagram?</h4>
-                  <p className="text-xs">Go to Profile {'>'} Accounts and click "Connect". You need a Business or Creator account.</p>
-                </div>
-                
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <h4 className="font-medium text-gray-900 mb-1 text-xs">Why no timing data?</h4>
-                  <p className="text-xs">You need at least 5-10 posts for timing analysis. Keep posting and check back!</p>
-                </div>
-                
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <h4 className="font-medium text-gray-900 mb-1 text-xs">How is frequency calculated?</h4>
-                  <p className="text-xs">We analyze your posting history to find the optimal frequency for your audience engagement.</p>
-                </div>
-              </div>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Quick Fixes</h3>
-              <div className="space-y-1 text-xs">
-                <p><strong>No data:</strong> Switch to Business/Creator mode</p>
-                <p><strong>Login issues:</strong> Log out and back in</p>
-                <p><strong>Slow loading:</strong> Check connection and refresh</p>
-                <p><strong>Missing insights:</strong> Need more posts for analysis</p>
-              </div>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Contact Us</h3>
-              <div className="space-y-2">
-                <div className="flex items-center space-x-3 p-2 bg-blue-50 rounded-lg">
-                  <div className="w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center">
-                    <span className="text-white text-xs">✉</span>
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900 text-xs">Email Support</p>
-                    <p className="text-blue-600 text-xs">support@socialsage.app</p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center space-x-3 p-2 bg-gray-50 rounded-lg">
-                  <div className="w-6 h-6 bg-green-600 rounded-full flex items-center justify-center">
-                    <span className="text-white text-xs">💬</span>
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900 text-xs">Live Chat</p>
-                    <p className="text-gray-600 text-xs">Mon-Fri 9AM-5PM PT</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div>
-              <h3 className="font-semibold text-gray-900 mb-2">Getting Started</h3>
-              <p>Connect your Instagram Business account, post regularly, and explore the new Timing and Frequency optimization views for personalized recommendations.</p>
-            </div>
-          </div>
-          
-          <button 
-            onClick={() => setShowHelpSupport(false)}
-            className="w-full mt-6 bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-all"
-          >
-            Got It
-          </button>
-        </div>
+        </ViewTracker>
       </div>
     );
 
@@ -3665,149 +4228,209 @@ const SocialSageMobile = () => {
         </div>
         
         <div className="p-4 space-y-4">
-          <div className="bg-white rounded-lg p-4 shadow-sm">
-            <div className="flex items-center space-x-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
-                <User className="w-8 h-8 text-white" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-gray-900">Your Account</h2>
-                <p className="text-gray-600">Social Media Analytics</p>
-                <p className="text-sm text-gray-500">SocialSage User</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg p-4 shadow-sm">
-            <h3 className="font-semibold text-gray-900 mb-3">Accounts</h3>
-            <div className="space-y-3">
-              {[
-                { 
-                  platform: 'Instagram', 
-                  connected: !!instagramData, 
-                  color: 'bg-pink-500', 
-                  username: instagramData?.username,
-                  isLoading: isDisconnectingInstagram
-                },
-                { platform: 'Twitter/X', connected: false, color: 'bg-black', comingSoon: true },
-                { platform: 'YouTube', connected: false, color: 'bg-red-600', comingSoon: true },
-                { platform: 'TikTok', connected: false, color: 'bg-gray-900', comingSoon: true }
-              ].map((account) => (
-                <div key={account.platform} className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className={`w-8 h-8 ${account.color} rounded-full flex items-center justify-center`}>
-                      <span className="text-white text-xs font-bold">
-                        {account.platform === 'Instagram' ? 'IG' : 
-                         account.platform === 'Twitter/X' ? 'X' : 
-                         account.platform === 'YouTube' ? 'YT' : 'TT'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-700">{account.platform}</span>
-                      {account.username && (
-                        <p className="text-xs text-gray-500">{account.username}</p>
-                      )}
-                    </div>
-                  </div>
-                  
-                  {account.platform === 'Instagram' ? (
-                    <button
-                      onClick={handleInstagramAuth}
-                      disabled={account.isLoading}
-                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
-                        account.connected 
-                          ? 'bg-red-100 text-red-800 border-red-200 hover:bg-red-200' 
-                          : 'bg-green-100 text-green-800 border-green-200 hover:bg-green-200'
-                      } ${account.isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      {account.isLoading ? (
-                        <div className="flex items-center space-x-1">
-                          <div className="animate-spin w-3 h-3 border border-red-600 border-t-transparent rounded-full"></div>
-                          <span>Wait...</span>
-                        </div>
-                      ) : (
-                        account.connected ? 'Disconnect' : 'Connect'
-                      )}
-                    </button>
-                  ) : (
-                    <div className={`px-3 py-1 rounded-full text-xs ${
-                      account.comingSoon ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      {account.comingSoon ? 'Coming Soon' : 'Connect'}
-                    </div>
-                  )}
+          <ViewTracker
+            featureName="profile_header"
+            metadata={{ has_instagram_data: !!instagramData }}
+          >
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <div className="flex items-center space-x-4">
+                <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+                  <User className="w-8 h-8 text-white" />
                 </div>
-              ))}
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Your Account</h2>
+                  <p className="text-gray-600">Social Media Analytics</p>
+                  <p className="text-sm text-gray-500">SocialSage User</p>
+                </div>
+              </div>
             </div>
-          </div>
+          </ViewTracker>
 
-          <div className="bg-white rounded-lg p-4 shadow-sm">
-            <h3 className="font-semibold text-gray-900 mb-3">Settings</h3>
-            <div className="space-y-3">
-              {[
-                { name: 'Notifications', clickable: false },
-                { name: 'Privacy', clickable: true, action: () => setShowPrivacyPolicy(true) },
-                { name: 'Billing', clickable: false },
-                { name: 'Help & Support', clickable: true, action: () => setShowHelpSupport(true) },
-                { name: 'About', clickable: true, action: () => setShowAbout(true) }
-              ].map((setting) => (
-                <button
-                  key={setting.name}
-                  onClick={setting.clickable ? setting.action : undefined}
-                  className={`w-full flex items-center justify-between py-2 ${
-                    setting.clickable ? 'hover:bg-gray-50 rounded-lg px-2 -mx-2' : ''
-                  }`}
-                  disabled={!setting.clickable}
+          <ViewTracker
+            featureName="profile_accounts_section"
+            metadata={{ 
+              instagram_connected: !!instagramData,
+              total_accounts: 4
+            }}
+          >
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <h3 className="font-semibold text-gray-900 mb-3">Accounts</h3>
+              {!instagramData && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <h4 className="font-semibold text-blue-900 mb-2">📸 Instagram Data Usage</h4>
+                 <p className="text-blue-800 text-sm mb-3">
+                    When you connect Instagram, we'll access your profile data, posts, comments, 
+                    and analytics to provide personalized insights. We never share your data 
+                    with third parties.
+                </p>
+                <a 
+                    href="/privacy" 
+                    target="_blank"
+                    className="text-blue-700 hover:text-blue-900 underline text-sm font-medium"
                 >
-                  <span className={`text-gray-700 ${setting.clickable ? 'text-blue-600' : ''}`}>
-                    {setting.name}
-                  </span>
-                  <div className={`${setting.clickable ? 'text-blue-400' : 'text-gray-400'}`}>›</div>
-                </button>
-              ))}
+                    📄 Read our full Privacy Policy →
+                </a>
             </div>
-          </div>
+        )}
+              <div className="space-y-3">
+                {[
+                  { 
+                    platform: 'Instagram', 
+                    connected: !!instagramData, 
+                    color: 'bg-pink-500', 
+                    username: instagramData?.username,
+                    isLoading: isDisconnectingInstagram
+                  },
+                  { platform: 'Twitter/X', connected: false, color: 'bg-black', comingSoon: true },
+                  { platform: 'YouTube', connected: false, color: 'bg-red-600', comingSoon: true },
+                  { platform: 'TikTok', connected: false, color: 'bg-gray-900', comingSoon: true }
+                ].map((account) => (
+                  <div key={account.platform} className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-8 h-8 ${account.color} rounded-full flex items-center justify-center`}>
+                        <span className="text-white text-xs font-bold">
+                          {account.platform === 'Instagram' ? 'IG' : 
+                           account.platform === 'Twitter/X' ? 'X' : 
+                           account.platform === 'YouTube' ? 'YT' : 'TT'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-700">{account.platform}</span>
+                        {account.username && (
+                          <p className="text-xs text-gray-500">{account.username}</p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {account.platform === 'Instagram' ? (
+                      <ClickTracker
+                        featureName="instagram_connection_toggle"
+                        metadata={{
+                          action: account.connected ? 'disconnect' : 'connect',
+                          has_data: account.connected
+                        }}
+                      >
+                        <button
+                          onClick={handleInstagramAuth}
+                          disabled={account.isLoading}
+                          className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                            account.connected 
+                              ? 'bg-red-100 text-red-800 border-red-200 hover:bg-red-200' 
+                              : 'bg-green-100 text-green-800 border-green-200 hover:bg-green-200'
+                          } ${account.isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          {account.isLoading ? (
+                            <div className="flex items-center space-x-1">
+                              <div className="animate-spin w-3 h-3 border border-red-600 border-t-transparent rounded-full"></div>
+                              <span>Wait...</span>
+                            </div>
+                          ) : (
+                            account.connected ? 'Disconnect' : 'Connect'
+                          )}
+                        </button>
+                      </ClickTracker>
+                    ) : (
+                      <div className={`px-3 py-1 rounded-full text-xs ${
+                        account.comingSoon ? 'bg-orange-100 text-orange-800' : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {account.comingSoon ? 'Coming Soon' : 'Connect'}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </ViewTracker>
+
+          <ViewTracker
+            featureName="profile_settings_section"
+            metadata={{ settings_count: 5 }}
+          >
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <h3 className="font-semibold text-gray-900 mb-3">Settings</h3>
+              <div className="space-y-3">
+                {[
+                  { name: 'Notifications', clickable: false },
+                  { name: 'Privacy Policy', clickable: true, action: () => window.open('/privacy', '_blank') },
+                  { name: 'Billing', clickable: false },
+                  { name: 'Help & Support', clickable: true, action: () => setShowHelpSupport(true) },
+                  { name: 'About', clickable: true, action: () => setShowAbout(true) }
+                ].map((setting) => (
+                  <ClickTracker
+                    key={setting.name}
+                    featureName={`profile_setting_${setting.name.toLowerCase().replace(/\s+/g, '_')}`}
+                    metadata={{ setting_name: setting.name, clickable: setting.clickable }}
+                  >
+                    <button
+                      onClick={setting.clickable ? setting.action : undefined}
+                      className={`w-full flex items-center justify-between py-2 ${
+                        setting.clickable ? 'hover:bg-gray-50 rounded-lg px-2 -mx-2' : ''
+                      }`}
+                      disabled={!setting.clickable}
+                    >
+                      <span className={`text-gray-700 ${setting.clickable ? 'text-blue-600' : ''}`}>
+                        {setting.name}
+                      </span>
+                      <div className={`${setting.clickable ? 'text-blue-400' : 'text-gray-400'}`}>›</div>
+                    </button>
+                  </ClickTracker>
+                ))}
+              </div>
+            </div>
+          </ViewTracker>
 
           {/* Enhanced Instagram Data Status */}
           {instagramData && (
-            <div className="bg-green-50 rounded-lg p-4 shadow-sm border border-green-200">
-              <h3 className="font-semibold text-green-800 mb-2 flex items-center">
-                <span className="mr-2">✅</span>
-                Instagram Data Connected
-              </h3>
-              <div className="space-y-1 text-sm">
-                <p className="text-green-700">Followers: {instagramData.followers.toLocaleString()}</p>
-                <p className="text-green-700">Posts: {instagramData.mediaCount}</p>
-                <p className="text-green-700">Engagement Rate: {instagramData.engagementRate}</p>
-                {instagramData.avgReach && (
-                  <p className="text-green-700">Avg Reach: {instagramData.avgReach.toLocaleString()}</p>
-                )}
-                {instagramData.accountInsights && (
-                  <>
-                    <p className="text-green-700">Profile Visits (30d): {instagramData.accountInsights.profile_visits.toLocaleString()}</p>
-                    <p className="text-green-700">Total Reach (30d): {(instagramData.accountInsights.reach / 1000).toFixed(1)}K</p>
-                  </>
-                )}
-                {instagramData.topFollowers && instagramData.topFollowers.length > 0 && (
-                  <p className="text-green-700">Top Followers: {instagramData.topFollowers.length} active commenters found</p>
-                )}
-                <p className="text-xs text-green-600 mt-2">Last updated: {new Date().toLocaleTimeString()}</p>
+            <ViewTracker
+              featureName="instagram_data_status"
+              metadata={{
+                followers: instagramData.followers,
+                posts_count: instagramData.mediaCount,
+                has_insights: !!instagramData.accountInsights
+              }}
+            >
+              <div className="bg-green-50 rounded-lg p-4 shadow-sm border border-green-200">
+                <h3 className="font-semibold text-green-800 mb-2 flex items-center">
+                  <span className="mr-2">✅</span>
+                  Instagram Data Connected
+                </h3>
+                <div className="space-y-1 text-sm">
+                  <p className="text-green-700">Followers: {instagramData.followers.toLocaleString()}</p>
+                  <p className="text-green-700">Posts: {instagramData.mediaCount}</p>
+                  <p className="text-green-700">Engagement Rate: {instagramData.engagementRate}</p>
+                  {instagramData.avgReach && (
+                    <p className="text-green-700">Avg Reach: {instagramData.avgReach.toLocaleString()}</p>
+                  )}
+                  {instagramData.accountInsights && (
+                    <>
+                      <p className="text-green-700">Profile Visits (30d): {instagramData.accountInsights.profile_visits.toLocaleString()}</p>
+                      <p className="text-green-700">Total Reach (30d): {(instagramData.accountInsights.reach / 1000).toFixed(1)}K</p>
+                    </>
+                  )}
+                  {instagramData.topFollowers && instagramData.topFollowers.length > 0 && (
+                    <p className="text-green-700">Top Followers: {instagramData.topFollowers.length} active commenters found</p>
+                  )}
+                  <p className="text-xs text-green-600 mt-2">Last updated: {new Date().toLocaleTimeString()}</p>
+                </div>
               </div>
-            </div>
+            </ViewTracker>
           )}
 
           {dataError && (
-            <div className="bg-red-50 rounded-lg p-4 shadow-sm border border-red-200">
-              <h3 className="font-semibold text-red-800 mb-2 flex items-center">
-                <span className="mr-2">⚠️</span>
-                Data Connection Issue
-              </h3>
-              <p className="text-red-700 text-sm">{dataError}</p>
-            </div>
+            <ViewTracker
+              featureName="instagram_data_error"
+              metadata={{ error_message: dataError }}
+            >
+              <div className="bg-red-50 rounded-lg p-4 shadow-sm border border-red-200">
+                <h3 className="font-semibold text-red-800 mb-2 flex items-center">
+                  <span className="mr-2">⚠️</span>
+                  Data Connection Issue
+                </h3>
+                <p className="text-red-700 text-sm">{dataError}</p>
+              </div>
+            </ViewTracker>
           )}
         </div>
-
-        {showPrivacyPolicy && <PrivacyPolicyModal />}
         {showAbout && <AboutModal />}
         {showHelpSupport && <HelpSupportModal />}
       </div>
@@ -3844,18 +4467,27 @@ const SocialSageMobile = () => {
           { id: 'notifications', icon: Bell, label: 'Notifications' },
           { id: 'profile', icon: User, label: 'Profile' }
         ].map((tab) => (
-          <button
+          <ClickTracker
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex flex-col items-center space-y-1 py-2 px-2 rounded-lg transition-colors ${
-              activeTab === tab.id
-                ? 'text-blue-600 bg-blue-50'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
+            featureName={`bottom_nav_${tab.id}`}
+            metadata={{ 
+              from_tab: activeTab,
+              to_tab: tab.id,
+              has_instagram_data: !!instagramData
+            }}
           >
-            <tab.icon className="w-4 h-4" />
-            <span className="text-xs font-medium">{tab.label}</span>
-          </button>
+            <button
+              onClick={() => handleTabChange(tab.id)}
+              className={`flex flex-col items-center space-y-1 py-2 px-2 rounded-lg transition-colors ${
+                activeTab === tab.id
+                  ? 'text-blue-600 bg-blue-50'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" />
+              <span className="text-xs font-medium">{tab.label}</span>
+            </button>
+          </ClickTracker>
         ))}
       </div>
     </div>

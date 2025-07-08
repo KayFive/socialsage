@@ -7,80 +7,6 @@ import SocialSageMobile from '@/components/mobile/SocialSageMobile'
 import { InstagramAccount } from '@/types/instagram'
 import { User } from '@supabase/supabase-js'
 
-// Debug components
-function DebugAuthService({ userId }: { userId: string }) {
-  const [results, setResults] = useState<any>(null)
-  const [loading, setLoading] = useState(false)
-
-  const testDirectQuery = async () => {
-    setLoading(true)
-    try {
-      console.log('🔍 Testing direct Supabase query...')
-      
-      const { data: userRecords, error: userError } = await supabase
-        .from('instagram_accounts')
-        .select('*')
-        .eq('user_id', userId)
-      
-      console.log('👤 User records test:', { userRecords, userError })
-      
-      setResults({ userRecords: userRecords || [], userError })
-      
-    } catch (error) {
-      console.error('❌ Debug test error:', error)
-      setResults({ error: error instanceof Error ? error.message : String(error) })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="p-2 bg-gray-100 rounded-lg mb-2">
-      <button
-        onClick={testDirectQuery}
-        disabled={loading}
-        className="bg-blue-500 text-white px-2 py-1 rounded text-xs"
-      >
-        {loading ? 'Testing...' : 'Test DB'}
-      </button>
-      
-      {results && (
-        <pre className="text-xs bg-white p-1 rounded mt-1 max-h-20 overflow-auto">
-          {JSON.stringify(results, null, 1)}
-        </pre>
-      )}
-    </div>
-  )
-}
-
-function DebugInstagramAuth() {
-  const [authUrl, setAuthUrl] = useState('')
-  
-  const getAuthUrl = () => {
-    const clientId = process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID || 'MISSING_CLIENT_ID'
-    const redirectUri = `${window.location.origin}/auth/instagram/callback`
-    const url = `https://www.instagram.com/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user_profile,user_media&response_type=code`
-    
-    console.log('🔗 Instagram Auth URL:', url)
-    setAuthUrl(url)
-  }
-  
-  return (
-    <div className="p-2 bg-yellow-100 rounded-lg mb-2">
-      <button
-        onClick={getAuthUrl}
-        className="bg-orange-500 text-white px-2 py-1 rounded text-xs"
-      >
-        Get Auth URL
-      </button>
-      
-      {authUrl && (
-        <p className="text-xs break-all bg-white p-1 rounded mt-1">{authUrl}</p>
-      )}
-    </div>
-  )
-}
-
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
   const [instagramAccount, setInstagramAccount] = useState<InstagramAccount | null>(null)
@@ -332,12 +258,35 @@ export default function HomePage() {
               </button>
             </form>
 
-            <p className="text-xs text-gray-500 text-center mt-4">
-              {isSignUp 
-                ? 'Create an account to connect your Instagram and start tracking your performance'
-                : 'Sign in to connect your Instagram account and start tracking your performance'
-              }
-            </p>
+            <div className="text-center mt-4 space-y-2">
+                <p className="text-xs text-gray-600">
+                    By {isSignUp ? 'creating an account' : 'signing in'}, you agree to our{' '}
+                    <a 
+                        href="/privacy" 
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 underline font-medium"
+                    >
+                        Privacy Policy
+                    </a>
+                    {' '}and{' '}
+                    <a 
+                        href="/terms" 
+                        target="_blank"
+                        rel="noopener noreferrer" 
+                        className="text-blue-600 hover:text-blue-800 underline font-medium"
+                    >
+                        Terms of Service
+                    </a>
+                </p>
+  
+                <p className="text-xs text-gray-500">
+                    {isSignUp 
+                     ? 'Create an account to connect your Instagram and start tracking your performance'
+                     : 'Sign in to connect your Instagram account and start tracking your performance'
+                 }
+             </p>
+        </div>
           </div>
         </div>
       </div>
@@ -354,33 +303,63 @@ export default function HomePage() {
           <div className="absolute top-4 right-4">
             <button
               onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-1 rounded-lg text-xs"
+              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
               Logout
             </button>
           </div>
           
-          {/* DEBUG COMPONENTS - Remove these later */}
-          <div className="w-full max-w-xs mb-6">
-            <DebugAuthService userId={user.id} />
-            <DebugInstagramAuth />
-          </div>
-          
           <div className="text-center mb-8">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Connect Instagram</h1>
-            <p className="text-gray-600">Connect your Instagram account to start analyzing your performance</p>
-            <p className="text-xs text-green-600 mt-2">✅ Signed in as: {user.email}</p>
+            <div className="w-20 h-20 bg-gradient-to-br from-pink-500 to-orange-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <span className="text-white text-3xl">📸</span>
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-3">Connect Instagram</h1>
+            <p className="text-gray-600 text-lg">Connect your Instagram account to start analyzing your performance</p>
+            <div className="mt-3 inline-flex items-center px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
+              <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+              Signed in as: {user.email}
+            </div>
+          </div>
+
+          {/* Privacy Notice for Meta Compliance */}
+          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6 mb-8 w-full max-w-md shadow-sm">
+            <h3 className="font-bold text-blue-900 mb-3 flex items-center">
+              <span className="mr-2">🔒</span>
+              Instagram Data Usage
+            </h3>
+            <p className="text-blue-800 text-sm mb-4 leading-relaxed">
+              When you connect Instagram, we'll access your profile data, posts, comments, 
+              and analytics to provide personalized insights. We never share your data 
+              with third parties.
+            </p>
+            <a 
+              href="/privacy" 
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center text-blue-700 hover:text-blue-900 underline text-sm font-medium transition-colors"
+            >
+              <span className="mr-1">📄</span>
+              Read our full Privacy Policy
+            </a>
           </div>
           
-          <div className="w-full max-w-xs space-y-4">
+          <div className="w-full max-w-md space-y-4">
             <button
               onClick={handleConnectInstagram}
-              className="w-full bg-gradient-to-r from-pink-500 to-orange-500 text-white rounded-2xl py-3 font-medium hover:shadow-lg transition-all"
+              className="w-full bg-gradient-to-r from-pink-500 to-orange-500 hover:from-pink-600 hover:to-orange-600 text-white rounded-2xl py-4 font-semibold text-lg shadow-lg hover:shadow-xl transition-all transform hover:scale-[1.02]"
             >
-              Connect Instagram
+              Connect Instagram Account
             </button>
-            <p className="text-xs text-gray-500 text-center">
-              We'll redirect you to Instagram to authorize SocialSage
+            <p className="text-xs text-gray-500 text-center leading-relaxed">
+              We'll redirect you to Instagram to authorize SocialSage. Your data is protected per our{' '}
+              <a 
+                href="/privacy" 
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-700 underline font-medium transition-colors"
+              >
+                Privacy Policy
+              </a>
             </p>
           </div>
         </div>

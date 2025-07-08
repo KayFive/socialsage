@@ -13,18 +13,22 @@
     "sync:tokens": "curl -X POST http://localhost:3000/api/sync/token-refresh -H 'Authorization: Bearer $CRON_SECRET_KEY'"
   },
   "dependencies": {
+    "@heroicons/react": "^2.2.0",
     "@supabase/auth-ui-react": "^0.4.7",
     "@supabase/auth-ui-shared": "^0.1.8",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.49.4",
     "date-fns": "^3.6.0",
     "lucide-react": "^0.511.0",
+    "mixpanel-browser": "^2.65.0",
     "next": "^15.3.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "recharts": "^3.0.2"
   },
   "devDependencies": {
     "@tsconfig/node18": "^18.2.4",
+    "@types/mixpanel-browser": "^2.60.0",
     "@types/node": "^22.10.2",
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.5",
