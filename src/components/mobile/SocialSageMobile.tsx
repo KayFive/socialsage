@@ -244,40 +244,45 @@ const SocialSageMobile = () => {
 
   // Logout function with tracking
   const handleLogout = async () => {
-    console.log('🚪 Logging out from dashboard...')
+  console.log('🚪 Logging out from dashboard...')
+  
+  // Track logout attempt
+  trackEngagement('user_logout', {
+    session_duration: Date.now() - (performance.timing?.navigationStart || Date.now()),
+    tabs_visited: [activeTab],
+    had_instagram_connected: !!instagramData
+  })
+  
+  try {
+    // Clear storage first
+    sessionStorage.removeItem('socialsage_user_id')
+    sessionStorage.removeItem('socialsage_user_email')
+    localStorage.clear()
     
-    // Track logout attempt
-    trackEngagement('user_logout', {
-      session_duration: Date.now() - (performance.timing?.navigationStart || Date.now()),
-      tabs_visited: [activeTab], // Could track more if you store tab history
-      had_instagram_connected: !!instagramData
-    })
+    // Sign out from Supabase
+    const { error } = await supabase.auth.signOut()
     
-    try {
-      sessionStorage.removeItem('socialsage_user_id')
-      sessionStorage.removeItem('socialsage_user_email')
-      localStorage.clear()
-      
-      const { error } = await supabase.auth.signOut()
-      
-      if (error) {
-        console.error('❌ Logout error:', error)
-        trackEngagement('logout_failed', { error: error.message })
-      } else {
-        console.log('✅ Logged out successfully')
-        trackEngagement('logout_successful')
-      }
-      
-      router.push('/')
-      router.refresh()
-      
-    } catch (error) {
-      console.error('❌ Error during logout:', error)
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      trackEngagement('logout_error', { error: errorMessage })
-      router.push('/')
+    if (error) {
+      console.error('❌ Logout error:', error)
+      trackEngagement('logout_failed', { error: error.message })
+      alert('Logout failed. Please try again.')
+      return
     }
+    
+    console.log('✅ Logged out successfully')
+    trackEngagement('logout_successful')
+    
+    // Force reload to clear any cached state
+    window.location.href = '/'
+    
+  } catch (error) {
+    console.error('❌ Error during logout:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    trackEngagement('logout_error', { error: errorMessage })
+    alert('An error occurred during logout. Redirecting...')
+    window.location.href = '/'
   }
+}
 
   // Fetch real Instagram data with tracking
   useEffect(() => {
@@ -2497,16 +2502,16 @@ const SocialSageMobile = () => {
           <h1 className="text-xl font-bold text-gray-900">SocialSage</h1>
           <div className="flex items-center space-x-2">
             <ClickTracker
-              featureName="logout_button"
-              metadata={{ session_length: Date.now() - performance.timing?.navigationStart }}
-            >
-              <button 
-                onClick={handleLogout}
-                className="text-sm text-red-600 hover:text-red-700 px-2 py-1 rounded"
-              >
-                Logout
-              </button>
-            </ClickTracker>
+  featureName="logout_button"
+  metadata={{ session_length: Date.now() - performance.timing?.navigationStart }}
+>
+  <button 
+    onClick={handleLogout}
+    className="text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg min-w-[60px] touch-manipulation"
+  >
+    Logout
+  </button>
+</ClickTracker>
             <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
               <Plus className="w-4 h-4 text-white" />
             </div>
