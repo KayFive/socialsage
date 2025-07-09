@@ -356,6 +356,12 @@ const SocialSageMobile = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Add this useEffect to scroll to top when changing views
+useEffect(() => {
+  // Scroll to top when changing tabs or metric categories
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}, [activeTab, selectedMetricCategory]);
+
   // Track timeframe changes
   const handleTimeFrameChange = (newTimeFrame: TimeFrame) => {
     const previousTimeFrame = timeFrame
