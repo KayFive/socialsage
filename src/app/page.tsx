@@ -1,9 +1,11 @@
+// app/page.tsx - Updated with AccountDataManagement component
 'use client'
 
 import React, { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { AuthService } from '@/lib/auth'
 import SocialSageMobile from '@/components/mobile/SocialSageMobile'
+import AccountDataManagement from '@/components/AccountDataManagement' // NEW IMPORT
 import { InstagramAccount } from '@/types/instagram'
 import { User } from '@supabase/supabase-js'
 
@@ -18,6 +20,9 @@ export default function HomePage() {
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
+
+  // NEW: Data management state
+  const [showDataManagement, setShowDataManagement] = useState(false)
 
   useEffect(() => {
     console.log('🔍 Starting auth check...')
@@ -165,10 +170,16 @@ export default function HomePage() {
       setEmail('')
       setPassword('')
       setAuthError('')
+      setShowDataManagement(false) // Reset data management view
       
     } catch (error) {
       console.error('❌ Error during logout:', error)
     }
+  }
+
+  // NEW: Handle data management navigation
+  const handleDataManagementAccess = () => {
+    setShowDataManagement(true)
   }
 
   // Loading state
@@ -181,6 +192,11 @@ export default function HomePage() {
         </div>
       </div>
     )
+  }
+
+  // NEW: Show data management if requested and user is signed in
+  if (showDataManagement && user) {
+    return <AccountDataManagement onBack={() => setShowDataManagement(false)} />
   }
 
   // Not signed in - Show login/signup form
@@ -259,34 +275,47 @@ export default function HomePage() {
             </form>
 
             <div className="text-center mt-4 space-y-2">
-                <p className="text-xs text-gray-600">
-                    By {isSignUp ? 'creating an account' : 'signing in'}, you agree to our{' '}
-                    <a 
-                        href="/privacy" 
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-800 underline font-medium"
-                    >
-                        Privacy Policy
-                    </a>
-                    {' '}and{' '}
-                    <a 
-                        href="/terms" 
-                        target="_blank"
-                        rel="noopener noreferrer" 
-                        className="text-blue-600 hover:text-blue-800 underline font-medium"
-                    >
-                        Terms of Service
-                    </a>
+              <p className="text-xs text-gray-600">
+                By {isSignUp ? 'creating an account' : 'signing in'}, you agree to our{' '}
+                <a 
+                  href="/privacy" 
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 underline font-medium"
+                >
+                  Privacy Policy
+                </a>
+                {' '}and{' '}
+                <a 
+                  href="/terms" 
+                  target="_blank"
+                  rel="noopener noreferrer" 
+                  className="text-blue-600 hover:text-blue-800 underline font-medium"
+                >
+                  Terms of Service
+                </a>
+              </p>
+
+              <p className="text-xs text-gray-500">
+                {isSignUp 
+                  ? 'Create an account to connect your Instagram and start tracking your performance'
+                  : 'Sign in to connect your Instagram account and start tracking your performance'
+                }
+              </p>
+
+              {/* NEW: Data management link for non-users */}
+              <div className="pt-4 border-t border-gray-200 mt-4">
+                <p className="text-xs text-gray-500 mb-2">
+                  Need to delete your data?
                 </p>
-  
-                <p className="text-xs text-gray-500">
-                    {isSignUp 
-                     ? 'Create an account to connect your Instagram and start tracking your performance'
-                     : 'Sign in to connect your Instagram account and start tracking your performance'
-                 }
-             </p>
-        </div>
+                <a 
+                  href="/data-deletion"
+                  className="text-blue-600 hover:text-blue-800 underline text-xs font-medium"
+                >
+                  📄 View Data Deletion Instructions
+                </a>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -299,8 +328,15 @@ export default function HomePage() {
     return (
       <div className="w-full min-h-screen bg-white flex flex-col">
         <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
-          {/* Logout button */}
-          <div className="absolute top-4 right-4">
+          {/* Header with logout and data management */}
+          <div className="absolute top-4 right-4 flex space-x-2">
+            {/* NEW: Data management button */}
+            <button
+              onClick={handleDataManagementAccess}
+              className="bg-gray-500 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              Manage Data
+            </button>
             <button
               onClick={handleLogout}
               className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
