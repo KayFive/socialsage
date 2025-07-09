@@ -2664,7 +2664,7 @@ const SocialSageMobile = () => {
 
         <div className="px-4 mb-4">
           <h2 className="text-lg font-semibold text-gray-900 mb-3">Detailed Analytics</h2>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 auto-rows-fr">
             {metricCategories.map((category, index) => {
               const cardColors = [
                 'bg-gradient-to-br from-emerald-100 to-teal-100 border-emerald-200',
@@ -2695,7 +2695,7 @@ const SocialSageMobile = () => {
     >
       <button
         onClick={() => handleMetricCategorySelect(category.id)}
-        className={`${cardColors[index]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all text-left hover:scale-105 transform duration-200 h-full flex flex-col w-full`}
+        className={`${cardColors[index]} rounded-2xl p-4 shadow-sm border hover:shadow-md transition-all text-left hover:scale-105 transform duration-200 h-full flex flex-col w-full min-h-[140px]`}
       >
         <div className={`w-12 h-12 bg-gradient-to-r ${category.color} rounded-2xl flex items-center justify-center mb-3 shadow-sm flex-shrink-0`}>
           <span className="text-2xl">{category.emoji}</span>
