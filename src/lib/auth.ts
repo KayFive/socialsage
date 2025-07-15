@@ -1,4 +1,4 @@
-// src/lib/auth.ts - Updated with environment-aware Instagram OAuth
+// src/lib/auth.ts - Updated with custom domain and Instagram OAuth fixes
 import { createBrowserClient } from '@supabase/ssr'
 import { InstagramAccount } from '@/types/instagram'
 
@@ -16,13 +16,19 @@ export class AuthService {
       const currentOrigin = window.location.origin;
       console.log('🌐 Client-side detected origin:', currentOrigin);
       
-      // If we're on Vercel production, always use the production URL
-      if (currentOrigin.includes('vercel.app') || currentOrigin.includes('socialsage-app')) {
-        console.log('✅ Using Vercel production URL');
-        return 'https://socialsage-app.vercel.app';
+      // If we're on the new custom domain, use it
+      if (currentOrigin.includes('app.socialsageapp.com')) {
+        console.log('✅ Using custom domain');
+        return 'https://app.socialsageapp.com';
       }
       
-      // If we're on ngrok, use ngrok URL  
+      // If we're on old Vercel production, redirect to new domain
+      if (currentOrigin.includes('socialsage-app.vercel.app')) {
+        console.log('🔄 Redirecting from old Vercel domain to custom domain');
+        return 'https://app.socialsageapp.com';
+      }
+      
+      // If we're on ngrok, use ngrok URL for development
       if (currentOrigin.includes('ngrok')) {
         console.log('🔧 Using ngrok development URL');
         return currentOrigin;
@@ -35,6 +41,8 @@ export class AuthService {
           console.log('🔧 Using ngrok URL from env for localhost');
           return ngrokUrl;
         }
+        // For localhost, use localhost
+        return currentOrigin;
       }
       
       // Fallback to current origin
@@ -62,9 +70,9 @@ export class AuthService {
       return baseUrl;
     }
     
-    // Final fallback to production
-    console.log('⚠️ Using production fallback URL');
-    return 'https://socialsage-app.vercel.app';
+    // Final fallback to new custom domain
+    console.log('⚠️ Using custom domain fallback URL');
+    return 'https://app.socialsageapp.com';
   }
 
   static getInstagramAuthUrl(userId?: string): string {
@@ -87,8 +95,8 @@ export class AuthService {
     console.log('- User ID for state:', userId || 'none');
     console.log('- Environment:', process.env.NODE_ENV);
     
-    // Only request the scopes you actually need (based on our conversation)
-    const scope = 'instagram_business_basic,instagram_business_manage_comments';
+    // ✅ FIXED: Include ALL required scopes including insights (exactly what Meta expects)
+    const scope = 'instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_insights';
     
     // Generate a unique state parameter
     const timestamp = Date.now();
@@ -101,6 +109,8 @@ export class AuthService {
       scope: scope,
       response_type: 'code',
       state: state
+      // Privacy policy URL is handled by Facebook app settings
+      // No need to include it in params since you've set it in Meta Developer Console
     });
     
     // Store auth initiation details for debugging
@@ -113,10 +123,12 @@ export class AuthService {
       }
     }
     
-    // Instagram Business API URL (NOT Basic Display API)
+    // ✅ CORRECT: Use standard Instagram OAuth endpoint
     const authUrl = `https://www.instagram.com/oauth/authorize?${params.toString()}`;
     console.log('🔗 Generated Instagram Auth URL:', authUrl);
     console.log('🔗 Redirect will go to:', redirectUri);
+    console.log('🔗 Privacy Policy configured in Meta app settings:', 'https://app.socialsageapp.com/privacy');
+    console.log('🔗 Scopes requested:', scope);
     
     return authUrl;
   }

@@ -666,8 +666,8 @@ async function captureDailySnapshot(
   }
 }
 
-// NEW: Function to fetch historical data for charts
-// FIXED: Function to fetch historical data for charts from daily_snapshots
+// REPLACE your fetchHistoricalData function with this improved dynamic version:
+
 async function fetchHistoricalData(
   supabase: any, 
   instagramAccountId: string,
@@ -676,113 +676,149 @@ async function fetchHistoricalData(
   try {
     console.log('📊 Fetching historical data from daily_snapshots for charts...')
     
-    // Fetch all daily snapshots for this account
-    const { data: snapshots, error } = await supabase
+    // Calculate date ranges dynamically
+    const now = new Date();
+    
+    // For 6 months ago: go to the 1st of that month to ensure we get complete months
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    sixMonthsAgo.setDate(1); // First day of that month
+    
+    // For 4 weeks ago: exact date
+    const fourWeeksAgo = new Date(now.getTime() - (4 * 7 * 24 * 60 * 60 * 1000));
+    
+    // Use the more recent date for weekly data
+    const weeklyStartDate = new Date(Math.max(sixMonthsAgo.getTime(), fourWeeksAgo.getTime()));
+    
+    // For monthly, use 6 months ago
+    const monthlyStartDate = sixMonthsAgo;
+    
+    console.log('📅 Dynamic date filters:', {
+      now: now.toISOString().split('T')[0],
+      sixMonthsAgo: sixMonthsAgo.toISOString().split('T')[0],
+      fourWeeksAgo: fourWeeksAgo.toISOString().split('T')[0],
+      weeklyStartDate: weeklyStartDate.toISOString().split('T')[0],
+      monthlyStartDate: monthlyStartDate.toISOString().split('T')[0]
+    });
+
+    // Fetch snapshots with date filtering
+    const { data: allSnapshots, error } = await supabase
       .from('daily_snapshots')
       .select('snapshot_date, followers_count')
       .eq('instagram_account_id', instagramAccountId)
+      .gte('snapshot_date', monthlyStartDate.toISOString().split('T')[0])
       .order('snapshot_date', { ascending: true })
 
-    if (error || !snapshots || snapshots.length === 0) {
+    if (error || !allSnapshots || allSnapshots.length === 0) {
       console.log('❌ No historical snapshots found:', error?.message || 'No data')
       return { weekly: [], monthly: [] }
     }
 
-    console.log(`✅ Found ${snapshots.length} daily snapshots for charts`)
-
-    // Transform daily snapshots into weekly data points
-    const weekly: HistoricalDataPoint[] = []
-    const weeklyGroups = new Map<string, { followers: number[], dates: string[] }>()
+    console.log(`✅ Found ${allSnapshots.length} snapshots within date range`)
     
-    snapshots.forEach((snapshot: { snapshot_date: string, followers_count: number }) => {
-      const date = new Date(snapshot.snapshot_date)
-      const weekStart = new Date(date)
-      weekStart.setDate(date.getDate() - date.getDay()) // Start of week (Sunday)
-      const weekKey = weekStart.toISOString().split('T')[0]
-      
-      if (!weeklyGroups.has(weekKey)) {
-        weeklyGroups.set(weekKey, { followers: [], dates: [] })
-      }
-      
-      weeklyGroups.get(weekKey)!.followers.push(snapshot.followers_count)
-      weeklyGroups.get(weekKey)!.dates.push(snapshot.snapshot_date)
-    })
-
-    // Convert weekly groups to data points
-    Array.from(weeklyGroups.entries()).forEach(([weekStart, data]) => {
-      const avgFollowers = Math.round(data.followers.reduce((sum, f) => sum + f, 0) / data.followers.length)
-      const isCurrentWeek = new Date(weekStart) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-      
-      weekly.push({
-        date: weekStart,
-        followers: avgFollowers,
-        isComplete: !isCurrentWeek
-      })
-    })
-
-    // Transform daily snapshots into monthly data points
-    const monthly: HistoricalDataPoint[] = []
-    const monthlyGroups = new Map<string, { followers: number[], dates: string[] }>()
-    
-    snapshots.forEach((snapshot: { snapshot_date: string, followers_count: number }) => {
-      const date = new Date(snapshot.snapshot_date)
-      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-      
-      if (!monthlyGroups.has(monthKey)) {
-        monthlyGroups.set(monthKey, { followers: [], dates: [] })
-      }
-      
-      monthlyGroups.get(monthKey)!.followers.push(snapshot.followers_count)
-      monthlyGroups.get(monthKey)!.dates.push(snapshot.snapshot_date)
-    })
-
-    // Convert monthly groups to data points
-    Array.from(monthlyGroups.entries()).forEach(([month, data]) => {
-      const avgFollowers = Math.round(data.followers.reduce((sum, f) => sum + f, 0) / data.followers.length)
-      const isCurrentMonth = month === new Date().toISOString().slice(0, 7)
-      
-      monthly.push({
-        date: month,
-        followers: avgFollowers,
-        isComplete: !isCurrentMonth
-      })
-    })
-
-    // Add current data point if not already included
-    const now = new Date()
-    
-    // Add current week if we have data
-    if (weekly.length > 0) {
-      const lastWeekDate = new Date(weekly[weekly.length - 1].date)
-      const currentWeekStart = new Date(now)
-      currentWeekStart.setDate(now.getDate() - now.getDay())
-      
-      if (lastWeekDate < currentWeekStart) {
-        weekly.push({
-          date: currentWeekStart.toISOString().split('T')[0],
-          followers: currentFollowers,
-          isComplete: false
-        })
-      }
+    // DEBUG: Show date range of actual data
+    if (allSnapshots.length > 0) {
+      console.log(`📅 Data range: ${allSnapshots[0].snapshot_date} to ${allSnapshots[allSnapshots.length - 1].snapshot_date}`)
     }
-    
-    // Add current month if we have data
-    if (monthly.length > 0) {
+
+    // Filter for weekly data (last 4 weeks only)
+    const weeklySnapshots = allSnapshots.filter((snapshot: { snapshot_date: string, followers_count: number }) => {
+      const snapshotDate = new Date(snapshot.snapshot_date);
+      return snapshotDate >= weeklyStartDate;
+    });
+
+    // Process WEEKLY data (last 4 weeks)
+    const weekly: HistoricalDataPoint[] = []
+    if (weeklySnapshots && weeklySnapshots.length > 0) {
+      const weeklyGroups = new Map<string, { followers: number[], dates: string[] }>()
+      
+      weeklySnapshots.forEach((snapshot: { snapshot_date: string, followers_count: number }) => {
+        const date = new Date(snapshot.snapshot_date)
+        const weekStart = new Date(date)
+        weekStart.setDate(date.getDate() - date.getDay()) // Start of week (Sunday)
+        const weekKey = weekStart.toISOString().split('T')[0]
+        
+        if (!weeklyGroups.has(weekKey)) {
+          weeklyGroups.set(weekKey, { followers: [], dates: [] })
+        }
+        
+        weeklyGroups.get(weekKey)!.followers.push(snapshot.followers_count)
+        weeklyGroups.get(weekKey)!.dates.push(snapshot.snapshot_date)
+      })
+
+      // Convert to array, sort by date, and limit to last 4 weeks
+      const weeklyEntries = Array.from(weeklyGroups.entries())
+        .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
+        .slice(-4) // Only keep last 4 weeks
+
+      weeklyEntries.forEach(([weekStart, data]) => {
+        const avgFollowers = Math.round(data.followers.reduce((sum, f) => sum + f, 0) / data.followers.length)
+        const weekStartDate = new Date(weekStart)
+        const currentWeekStart = new Date(now)
+        currentWeekStart.setDate(now.getDate() - now.getDay())
+        const isCurrentWeek = weekStartDate.getTime() >= currentWeekStart.getTime()
+        
+        weekly.push({
+          date: weekStart,
+          followers: avgFollowers,
+          isComplete: !isCurrentWeek
+        })
+      })
+    }
+
+    // Process MONTHLY data (all months in range)
+    const monthly: HistoricalDataPoint[] = []
+    if (allSnapshots && allSnapshots.length > 0) {
+      const monthlyGroups = new Map<string, { followers: number[], dates: string[] }>()
+      
+      allSnapshots.forEach((snapshot: { snapshot_date: string, followers_count: number }) => {
+        const date = new Date(snapshot.snapshot_date)
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+        
+        if (!monthlyGroups.has(monthKey)) {
+          monthlyGroups.set(monthKey, { followers: [], dates: [] })
+        }
+        
+        monthlyGroups.get(monthKey)!.followers.push(snapshot.followers_count)
+        monthlyGroups.get(monthKey)!.dates.push(snapshot.snapshot_date)
+      })
+
+      // Convert to array and sort by date (no artificial limit - let 6-month filter handle it)
+      const monthlyEntries = Array.from(monthlyGroups.entries())
+        .sort(([a], [b]) => new Date(a + '-01').getTime() - new Date(b + '-01').getTime())
+
+      monthlyEntries.forEach(([month, data]) => {
+        const avgFollowers = Math.round(data.followers.reduce((sum, f) => sum + f, 0) / data.followers.length)
+        const currentMonth = now.toISOString().slice(0, 7)
+        const isCurrentMonth = month === currentMonth
+        
+        monthly.push({
+          date: month,
+          followers: avgFollowers,
+          isComplete: !isCurrentMonth
+        })
+      })
+
+      // ENSURE current month is included (even if no snapshots yet)
       const currentMonth = now.toISOString().slice(0, 7)
       const hasCurrentMonth = monthly.some(m => m.date === currentMonth)
       
       if (!hasCurrentMonth) {
+        console.log(`📅 Adding current month (${currentMonth}) with current followers: ${currentFollowers}`)
         monthly.push({
           date: currentMonth,
           followers: currentFollowers,
           isComplete: false
         })
       }
+
+      // Sort monthly data again after potential addition
+      monthly.sort((a, b) => new Date(a.date + '-01').getTime() - new Date(b.date + '-01').getTime())
     }
 
-    console.log(`📊 Generated chart data: ${weekly.length} weekly points, ${monthly.length} monthly points`)
-    console.log('📈 Weekly data:', weekly.map(w => `${w.date}: ${w.followers}`))
-    console.log('📈 Monthly data:', monthly.map(m => `${m.date}: ${m.followers}`))
+    console.log(`📊 Generated dynamic chart data: ${weekly.length} weekly points (max 4), ${monthly.length} monthly points`)
+    console.log('📈 Weekly data:', weekly.map(w => `${w.date}: ${w.followers.toLocaleString()}`))
+    console.log('📈 Monthly data:', monthly.map(m => `${m.date}: ${m.followers.toLocaleString()}`))
 
     return { weekly, monthly }
   } catch (error) {
