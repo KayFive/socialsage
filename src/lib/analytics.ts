@@ -1,4 +1,5 @@
-// src/lib/analytics.ts
+// src/lib/analytics.ts - Fixed Mixpanel initialization, preserving ALL existing functionality
+
 import { createClient } from '@supabase/supabase-js'
 
 interface AnalyticsEvent {
@@ -30,6 +31,7 @@ class AnalyticsService {
   private sessionStart: Date = new Date()
   private pagesVisited: number = 0
   private actionsCount: number = 0
+  private mixpanelInitialized: boolean = false
 
   constructor() {
     this.initializeMixpanel()
@@ -39,17 +41,36 @@ class AnalyticsService {
   private async initializeMixpanel() {
     if (typeof window !== 'undefined') {
       try {
-        const mixpanel = await import('mixpanel-browser')
-        if (process.env.NEXT_PUBLIC_MIXPANEL_TOKEN) {
-          mixpanel.init(process.env.NEXT_PUBLIC_MIXPANEL_TOKEN, {
+        const token = process.env.NEXT_PUBLIC_MIXPANEL_TOKEN
+        
+        if (!token) {
+          console.warn('⚠️ Mixpanel token not found, analytics will use Supabase only')
+          return
+        }
+
+        console.log('📥 Loading Mixpanel...')
+        
+        // ✅ FIXED: Proper dynamic import handling
+        const mixpanelModule = await import('mixpanel-browser')
+        const mixpanel = mixpanelModule.default || mixpanelModule
+        
+        if (mixpanel && typeof mixpanel.init === 'function') {
+          mixpanel.init(token, {
             debug: process.env.NODE_ENV === 'development',
             track_pageview: false, // We'll handle this manually
             persistence: 'localStorage'
           })
+          
           this.mixpanel = mixpanel
+          this.mixpanelInitialized = true
+          console.log('✅ Mixpanel initialized successfully')
+        } else {
+          throw new Error('Mixpanel module loaded but init function not available')
         }
       } catch (error) {
-        console.warn('Mixpanel failed to initialize:', error)
+        console.error('❌ Mixpanel failed to initialize:', error)
+        console.log('📊 Analytics will continue with Supabase-only tracking')
+        // Don't throw - let the app continue with Supabase tracking only
       }
     }
   }
@@ -79,10 +100,14 @@ class AnalyticsService {
   async identifyUser(userProperties: UserProperties) {
     const { userId, ...properties } = userProperties
 
-    // Mixpanel identification
-    if (this.mixpanel) {
-      this.mixpanel.identify(userId)
-      this.mixpanel.people.set(properties)
+    // Mixpanel identification (only if initialized)
+    if (this.mixpanel && this.mixpanelInitialized) {
+      try {
+        this.mixpanel.identify(userId)
+        this.mixpanel.people.set(properties)
+      } catch (error) {
+        console.error('❌ Mixpanel identify failed:', error)
+      }
     }
 
     // Store in Supabase (only if we have service role key)
@@ -361,16 +386,21 @@ class AnalyticsService {
 
   // GENERIC EVENT TRACKING
   track(event: string, properties?: Record<string, any>, userId?: string) {
-    if (this.mixpanel) {
-      const eventProperties = {
-        ...properties,
-        session_id: this.sessionId,
-        timestamp: new Date().toISOString(),
-        page_path: typeof window !== 'undefined' ? window.location.pathname : '',
-        ...this.getDeviceData()
-      }
+    // ✅ FIXED: Added safety checks for Mixpanel
+    if (this.mixpanel && this.mixpanelInitialized) {
+      try {
+        const eventProperties = {
+          ...properties,
+          session_id: this.sessionId,
+          timestamp: new Date().toISOString(),
+          page_path: typeof window !== 'undefined' ? window.location.pathname : '',
+          ...this.getDeviceData()
+        }
 
-      this.mixpanel.track(event, eventProperties)
+        this.mixpanel.track(event, eventProperties)
+      } catch (error) {
+        console.error('❌ Mixpanel track failed:', error)
+      }
     }
   }
 
@@ -482,6 +512,26 @@ class AnalyticsService {
   getReferrer(): string {
     if (typeof document === 'undefined') return ''
     return document.referrer
+  }
+
+  // ✅ NEW: Debug method to check analytics status
+  debugStatus(): void {
+    console.log('🔍 Analytics Debug Information:');
+    console.log('- Mixpanel token:', process.env.NEXT_PUBLIC_MIXPANEL_TOKEN ? '✅ Set' : '❌ Missing');
+    console.log('- Mixpanel initialized:', this.mixpanelInitialized);
+    console.log('- Supabase service key:', process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ Set' : '❌ Missing (using anon key)');
+    console.log('- Session ID:', this.sessionId);
+    console.log('- Pages visited:', this.pagesVisited);
+    console.log('- Actions count:', this.actionsCount);
+    console.log('- Environment:', process.env.NODE_ENV);
+    
+    if (typeof window !== 'undefined' && this.mixpanel) {
+      console.log('- Mixpanel functions available:', {
+        track: typeof this.mixpanel.track === 'function',
+        identify: typeof this.mixpanel.identify === 'function',
+        people: !!this.mixpanel.people
+      });
+    }
   }
 }
 

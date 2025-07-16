@@ -1,32 +1,39 @@
-// src/lib/auth.ts - Updated with custom domain and Instagram OAuth fixes
+// src/lib/auth.ts - Replace your entire file with this
+
 import { createBrowserClient } from '@supabase/ssr'
 import { InstagramAccount } from '@/types/instagram'
 
-// Create modern Supabase client
-const supabase = createBrowserClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+// Singleton pattern to ensure only one Supabase client instance
+let supabaseInstance: ReturnType<typeof createBrowserClient> | null = null;
+
+function getSupabaseClient() {
+  if (!supabaseInstance) {
+    supabaseInstance = createBrowserClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+    console.log('🔧 Created new Supabase client instance');
+  }
+  return supabaseInstance;
+}
+
+// Get the singleton instance
+const supabase = getSupabaseClient();
 
 export class AuthService {
   // Helper method to determine the correct base URL based on environment
   static getBaseUrl(): string {
-    // Check if we're in browser environment
+    // Priority 1: Use NEXT_PUBLIC_APP_URL if set (production and configured environments)
+    const envAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+    if (envAppUrl) {
+      console.log('✅ Using APP_URL from environment:', envAppUrl);
+      return envAppUrl;
+    }
+
+    // Priority 2: Browser environment detection for development
     if (typeof window !== 'undefined') {
       const currentOrigin = window.location.origin;
       console.log('🌐 Client-side detected origin:', currentOrigin);
-      
-      // If we're on the new custom domain, use it
-      if (currentOrigin.includes('app.socialsageapp.com')) {
-        console.log('✅ Using custom domain');
-        return 'https://app.socialsageapp.com';
-      }
-      
-      // If we're on old Vercel production, redirect to new domain
-      if (currentOrigin.includes('socialsage-app.vercel.app')) {
-        console.log('🔄 Redirecting from old Vercel domain to custom domain');
-        return 'https://app.socialsageapp.com';
-      }
       
       // If we're on ngrok, use ngrok URL for development
       if (currentOrigin.includes('ngrok')) {
@@ -34,49 +41,37 @@ export class AuthService {
         return currentOrigin;
       }
       
-      // If we're on localhost, check environment variable for ngrok URL
+      // If we're on localhost, check for ngrok URL in environment
       if (currentOrigin.includes('localhost')) {
-        const ngrokUrl = process.env.NEXT_PUBLIC_APP_URL;
-        if (ngrokUrl && ngrokUrl.includes('ngrok')) {
-          console.log('🔧 Using ngrok URL from env for localhost');
-          return ngrokUrl;
+        // Check if there's an ngrok URL in redirect URI we can extract
+        const envRedirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI;
+        if (envRedirectUri && envRedirectUri.includes('ngrok')) {
+          const baseUrl = envRedirectUri.replace('/auth/instagram/callback', '');
+          console.log('🔧 Using ngrok URL extracted from redirect URI for localhost');
+          return baseUrl;
         }
-        // For localhost, use localhost
+        // For localhost without ngrok, use localhost
         return currentOrigin;
       }
       
-      // Fallback to current origin
+      // For any other browser environment, use current origin
       return currentOrigin;
     }
     
-    // Server-side: use environment variables
-    const envAppUrl = process.env.NEXT_PUBLIC_APP_URL;
+    // Priority 3: Server-side fallback - extract from redirect URI if available
     const envRedirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI;
-    
-    console.log('🖥️ Server-side environment check:');
-    console.log('- APP_URL:', envAppUrl);
-    console.log('- REDIRECT_URI:', envRedirectUri);
-    
-    // Prefer APP_URL if set
-    if (envAppUrl) {
-      console.log('✅ Using APP_URL from environment');
-      return envAppUrl;
-    }
-    
-    // Extract base URL from redirect URI if available
     if (envRedirectUri) {
       const baseUrl = envRedirectUri.replace('/auth/instagram/callback', '');
-      console.log('✅ Extracted base URL from REDIRECT_URI');
+      console.log('✅ Server-side: Extracted base URL from REDIRECT_URI:', baseUrl);
       return baseUrl;
     }
     
-    // Final fallback to new custom domain
-    console.log('⚠️ Using custom domain fallback URL');
-    return 'https://app.socialsageapp.com';
+    // Final fallback (should rarely be used if environment is properly configured)
+    console.warn('⚠️ No environment variables found, using localhost fallback');
+    return 'http://localhost:3000';
   }
 
   static getInstagramAuthUrl(userId?: string): string {
-    // Get environment variables with proper fallbacks
     const clientId = process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID;
     
     if (!clientId) {
@@ -84,21 +79,24 @@ export class AuthService {
       throw new Error('Instagram Client ID not configured');
     }
     
-    // Get the correct base URL
-    const baseUrl = this.getBaseUrl();
-    const redirectUri = `${baseUrl}/auth/instagram/callback`;
+    let redirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI;
+    
+    if (!redirectUri) {
+      const baseUrl = this.getBaseUrl();
+      redirectUri = `${baseUrl}/auth/instagram/callback`;
+      console.log('🔧 Constructed redirect URI from base URL');
+    } else {
+      console.log('✅ Using redirect URI from environment');
+    }
     
     console.log('🔧 Instagram Auth Config:');
     console.log('- Client ID:', clientId);
-    console.log('- Base URL:', baseUrl);
     console.log('- Redirect URI:', redirectUri);
     console.log('- User ID for state:', userId || 'none');
     console.log('- Environment:', process.env.NODE_ENV);
     
-    // ✅ FIXED: Include ALL required scopes including insights (exactly what Meta expects)
     const scope = 'instagram_business_basic,instagram_business_manage_comments,instagram_business_manage_insights';
     
-    // Generate a unique state parameter
     const timestamp = Date.now();
     const randomId = crypto.randomUUID().substring(0, 8);
     const state = userId ? `${timestamp}_${randomId}_USER_${userId}` : `${timestamp}_${randomId}`;
@@ -109,12 +107,10 @@ export class AuthService {
       scope: scope,
       response_type: 'code',
       state: state
-      // Privacy policy URL is handled by Facebook app settings
-      // No need to include it in params since you've set it in Meta Developer Console
     });
     
-    // Store auth initiation details for debugging
     if (typeof window !== 'undefined') {
+      const baseUrl = this.getBaseUrl();
       sessionStorage.setItem('oauth_initiated_from', baseUrl);
       sessionStorage.setItem('oauth_redirect_uri', redirectUri);
       sessionStorage.setItem('oauth_timestamp', timestamp.toString());
@@ -123,11 +119,9 @@ export class AuthService {
       }
     }
     
-    // ✅ CORRECT: Use standard Instagram OAuth endpoint
     const authUrl = `https://www.instagram.com/oauth/authorize?${params.toString()}`;
     console.log('🔗 Generated Instagram Auth URL:', authUrl);
     console.log('🔗 Redirect will go to:', redirectUri);
-    console.log('🔗 Privacy Policy configured in Meta app settings:', 'https://app.socialsageapp.com/privacy');
     console.log('🔗 Scopes requested:', scope);
     
     return authUrl;
@@ -144,7 +138,6 @@ export class AuthService {
     try {
       console.log('📡 Making Supabase query...');
       
-      // Use maybeSingle() instead of single() to avoid errors when no records exist
       const { data, error } = await supabase
         .from('instagram_accounts')
         .select('*')
@@ -152,7 +145,7 @@ export class AuthService {
         .eq('is_active', true)
         .order('created_at', { ascending: false })
         .limit(1)
-        .maybeSingle(); // This won't throw error if no records found
+        .maybeSingle();
 
       console.log('📊 AuthService: Query result:');
       console.log('- Data:', data);
@@ -234,7 +227,6 @@ export class AuthService {
     console.log('📊 Account data:', accountData);
     
     try {
-      // Use server-side API instead of direct client call to bypass RLS
       const response = await fetch('/api/auth/instagram/save-account', {
         method: 'POST',
         headers: {
@@ -324,7 +316,6 @@ export class AuthService {
         throw new Error(`Sign out failed: ${error.message}`);
       }
       
-      // Clear any local storage or session data
       if (typeof window !== 'undefined') {
         localStorage.clear();
         sessionStorage.clear();
@@ -338,12 +329,10 @@ export class AuthService {
     }
   }
 
-  // Helper method to get auth state changes
   static onAuthStateChange(callback: (event: string, session: any) => void) {
     return supabase.auth.onAuthStateChange(callback);
   }
 
-  // Helper method to get current session
   static async getSession() {
     try {
       const { data: { session }, error } = await supabase.auth.getSession();
@@ -360,7 +349,35 @@ export class AuthService {
     }
   }
 
-  // Debug helper to check environment configuration
+  // Helper method to clear all auth-related storage and reset state
+  static clearAuthState() {
+    console.log('🧹 Clearing all auth state...');
+    
+    if (typeof window !== 'undefined') {
+      // Clear localStorage
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('supabase') || key.includes('oauth') || key.includes('instagram'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      
+      // Clear sessionStorage
+      const sessionKeysToRemove = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && (key.includes('supabase') || key.includes('oauth') || key.includes('instagram'))) {
+          sessionKeysToRemove.push(key);
+        }
+      }
+      sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
+      
+      console.log('✅ Cleared storage keys:', [...keysToRemove, ...sessionKeysToRemove]);
+    }
+  }
+
   static debugEnvironment() {
     console.log('🔍 Environment Debug Information:');
     console.log('- NODE_ENV:', process.env.NODE_ENV);
@@ -368,6 +385,7 @@ export class AuthService {
     console.log('- NEXT_PUBLIC_APP_URL:', process.env.NEXT_PUBLIC_APP_URL);
     console.log('- NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI:', process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI);
     console.log('- NEXT_PUBLIC_INSTAGRAM_CLIENT_ID:', process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID ? '✅ Set' : '❌ Missing');
+    console.log('- Supabase client instance ID:', supabase);
     
     if (typeof window !== 'undefined') {
       console.log('- SessionStorage oauth data:', {
@@ -376,13 +394,18 @@ export class AuthService {
         timestamp: sessionStorage.getItem('oauth_timestamp'),
         user_id: sessionStorage.getItem('oauth_user_id')
       });
+      
+      console.log('- LocalStorage supabase keys:', 
+        Object.keys(localStorage).filter(key => key.includes('supabase'))
+      );
     }
     
     const baseUrl = this.getBaseUrl();
     console.log('- Calculated base URL:', baseUrl);
-    console.log('- Calculated redirect URI:', `${baseUrl}/auth/instagram/callback`);
+    
+    const redirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI || `${baseUrl}/auth/instagram/callback`;
+    console.log('- Redirect URI that will be used:', redirectUri);
   }
 }
 
-// Export the supabase client for direct use if needed
 export { supabase };

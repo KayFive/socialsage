@@ -1,51 +1,58 @@
-// src/app/api/auth/instagram/token/route.ts - Fixed with dynamic redirect URI
+// src/app/api/auth/instagram/token/route.ts - Updated with dynamic environment-based redirect URI
 
 import { NextRequest, NextResponse } from 'next/server'
 
-// Helper function to determine the correct redirect URI (SAME logic as auth.ts)
+// Helper function to determine the correct redirect URI using environment variables
 function getRedirectUri(request: NextRequest): string {
-  // Get the host from the request headers
-  const host = request.headers.get('host')
-  const protocol = request.headers.get('x-forwarded-proto') || 'https'
+  console.log('🔍 Token Exchange - Determining Redirect URI:')
   
-  console.log('🔍 Token Exchange - Host Detection:')
-  console.log('- Host:', host)
-  console.log('- Protocol:', protocol)
-  console.log('- User-Agent:', request.headers.get('user-agent')?.substring(0, 50))
-  
-  // If we're on Vercel production
-  if (host?.includes('vercel.app') || host?.includes('socialsage-app')) {
-    const redirectUri = 'https://socialsage-app.vercel.app/auth/instagram/callback'
-    console.log('✅ Using Vercel production redirect URI:', redirectUri)
-    return redirectUri
-  }
-  
-  // If we're on ngrok
-  if (host?.includes('ngrok')) {
-    const redirectUri = `${protocol}://${host}/auth/instagram/callback`
-    console.log('🔧 Using ngrok redirect URI:', redirectUri)
-    return redirectUri
-  }
-  
-  // If we're on localhost, check environment variable
-  if (host?.includes('localhost')) {
-    const envRedirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI
-    if (envRedirectUri && envRedirectUri.includes('ngrok')) {
-      console.log('🔧 Using ngrok URI from env for localhost:', envRedirectUri)
-      return envRedirectUri
-    }
-  }
-  
-  // Fallback: try environment variable
+  // Priority 1: Use NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI if set (recommended approach)
   const envRedirectUri = process.env.NEXT_PUBLIC_INSTAGRAM_REDIRECT_URI
   if (envRedirectUri) {
-    console.log('📝 Using environment redirect URI:', envRedirectUri)
+    console.log('✅ Using redirect URI from environment:', envRedirectUri)
     return envRedirectUri
   }
   
-  // Final fallback to production
-  const fallbackUri = 'https://socialsage-app.vercel.app/auth/instagram/callback'
-  console.log('⚠️ Using production fallback redirect URI:', fallbackUri)
+  // Priority 2: Use NEXT_PUBLIC_APP_URL if set
+  const envAppUrl = process.env.NEXT_PUBLIC_APP_URL
+  if (envAppUrl) {
+    const redirectUri = `${envAppUrl}/auth/instagram/callback`
+    console.log('✅ Constructed redirect URI from APP_URL:', redirectUri)
+    return redirectUri
+  }
+  
+  // Priority 3: Development environment detection from request headers
+  const host = request.headers.get('host')
+  const protocol = request.headers.get('x-forwarded-proto') || 'https'
+  
+  console.log('🔍 Request details:')
+  console.log('- Host:', host)
+  console.log('- Protocol:', protocol)
+  
+  if (host) {
+    // If we're on ngrok (development)
+    if (host.includes('ngrok')) {
+      const redirectUri = `${protocol}://${host}/auth/instagram/callback`
+      console.log('🔧 Using ngrok redirect URI from request:', redirectUri)
+      return redirectUri
+    }
+    
+    // If we're on localhost (development)
+    if (host.includes('localhost')) {
+      const redirectUri = `${protocol}://${host}/auth/instagram/callback`
+      console.log('🔧 Using localhost redirect URI from request:', redirectUri)
+      return redirectUri
+    }
+    
+    // For any other host, construct redirect URI
+    const redirectUri = `${protocol}://${host}/auth/instagram/callback`
+    console.log('🔧 Constructed redirect URI from request host:', redirectUri)
+    return redirectUri
+  }
+  
+  // Final fallback (should rarely be used if environment is properly configured)
+  const fallbackUri = 'http://localhost:3000/auth/instagram/callback'
+  console.warn('⚠️ No environment variables or valid host found, using localhost fallback:', fallbackUri)
   return fallbackUri
 }
 
@@ -62,7 +69,7 @@ export async function POST(request: NextRequest) {
     const clientId = process.env.NEXT_PUBLIC_INSTAGRAM_CLIENT_ID
     const clientSecret = process.env.INSTAGRAM_CLIENT_SECRET
     
-    // ✅ FIXED: Use dynamic redirect URI (same logic as auth.ts)
+    // ✅ FIXED: Use dynamic redirect URI from environment variables
     const redirectUri = getRedirectUri(request)
     
     if (!clientId || !clientSecret) {
@@ -87,7 +94,7 @@ export async function POST(request: NextRequest) {
         client_id: clientId,
         client_secret: clientSecret,
         grant_type: 'authorization_code',
-        redirect_uri: redirectUri, // ✅ Now uses dynamic URI
+        redirect_uri: redirectUri, // ✅ Now uses dynamic URI from environment
         code: code,
       }),
     })

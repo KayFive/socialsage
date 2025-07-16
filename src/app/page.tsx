@@ -1,11 +1,13 @@
-// app/page.tsx - Updated with AccountDataManagement component
+// app/page.tsx - Updated with ProgressiveLoadingState and analytics tracking
 'use client'
 
 import React, { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { AuthService } from '@/lib/auth'
+import { analytics } from '@/lib/analytics' // ✅ NEW: Import analytics
 import SocialSageMobile from '@/components/mobile/SocialSageMobile'
-import AccountDataManagement from '@/components/AccountDataManagement' // NEW IMPORT
+import AccountDataManagement from '@/components/AccountDataManagement'
+import ProgressiveLoadingState from '@/components/ProgressiveLoadingState' // ✅ NEW: Import enhanced loading
 import { InstagramAccount } from '@/types/instagram'
 import { User } from '@supabase/supabase-js'
 
@@ -21,11 +23,17 @@ export default function HomePage() {
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
 
-  // NEW: Data management state
+  // Data management state
   const [showDataManagement, setShowDataManagement] = useState(false)
 
   useEffect(() => {
     console.log('🔍 Starting auth check...')
+    
+    // ✅ NEW: Track page load start
+    analytics.track('App Load Started', {
+      timestamp: new Date().toISOString(),
+      user_agent: typeof window !== 'undefined' ? navigator.userAgent : undefined
+    })
     
     // Get initial session
     supabase.auth.getSession().then(({ data: { session }, error }) => {
@@ -39,13 +47,34 @@ export default function HomePage() {
       setUser(session?.user ?? null)
       if (session?.user) {
         console.log('✅ User found, loading Instagram...')
+        
+        // ✅ NEW: Track successful auth check
+        analytics.identifyUser({
+          userId: session.user.id,
+          email: session.user.email || undefined
+        })
+        analytics.track('Auth Check - User Found', {
+          user_id: session.user.id,
+          email: session.user.email
+        }, session.user.id)
+        
         loadInstagramAccount(session.user.id)
       } else {
         console.log('❌ No user, stopping loading')
+        
+        // ✅ NEW: Track no user found
+        analytics.track('Auth Check - No User Found')
+        
         setIsLoading(false)
       }
     }).catch(error => {
       console.error('❌ Session check failed:', error)
+      
+      // ✅ NEW: Track auth check error
+      analytics.track('Auth Check Failed', {
+        error_message: error.message || 'Unknown error'
+      })
+      
       setIsLoading(false)
     })
 
@@ -53,6 +82,14 @@ export default function HomePage() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('🔄 Auth state changed:', event, !!session?.user)
+        
+        // ✅ NEW: Track auth state changes
+        analytics.track('Auth State Changed', {
+          event_type: event,
+          has_user: !!session?.user,
+          user_id: session?.user?.id
+        }, session?.user?.id)
+        
         setUser(session?.user ?? null)
         if (session?.user) {
           await loadInstagramAccount(session.user.id)
@@ -72,9 +109,24 @@ export default function HomePage() {
       console.log('🔍 Calling AuthService.getActiveInstagramAccount...')
       const account = await AuthService.getActiveInstagramAccount(userId)
       console.log('📸 Instagram account result:', !!account, account?.username)
+      
+      // ✅ NEW: Track Instagram account load result
+      analytics.track('Instagram Account Load Result', {
+        has_account: !!account,
+        username: account?.username,
+        user_id: userId
+      }, userId)
+      
       setInstagramAccount(account)
     } catch (error) {
       console.error('❌ Error loading Instagram account:', error)
+      
+      // ✅ NEW: Track Instagram account load error
+      analytics.track('Instagram Account Load Error', {
+        error_message: error instanceof Error ? error.message : 'Unknown error',
+        user_id: userId
+      }, userId)
+      
       setInstagramAccount(null)
     } finally {
       console.log('✅ Finished loading Instagram account')
@@ -93,6 +145,12 @@ export default function HomePage() {
       return
     }
 
+    // ✅ NEW: Track auth attempt start
+    analytics.track('Auth Attempt Started', {
+      auth_type: isSignUp ? 'signup' : 'signin',
+      email: email
+    })
+
     try {
       if (isSignUp) {
         console.log('📝 Starting email sign up...')
@@ -105,8 +163,21 @@ export default function HomePage() {
         
         if (data?.user && !data.session) {
           setAuthError('Please check your email and click the confirmation link to complete signup.')
+          
+          // ✅ NEW: Track signup confirmation needed
+          analytics.track('Signup - Email Confirmation Required', {
+            email: email,
+            user_id: data.user.id
+          })
         } else {
           console.log('✅ Sign up successful')
+          
+          // ✅ NEW: Track successful signup
+          analytics.trackSignup(data.user!.id, {
+            source: 'email',
+            referralUrl: typeof window !== 'undefined' ? document.referrer : undefined,
+            utmParams: analytics.getUtmParams()
+          })
         }
       } else {
         console.log('🔐 Starting email sign in...')
@@ -117,10 +188,22 @@ export default function HomePage() {
         
         if (error) throw error
         console.log('✅ Sign in successful')
+        
+        // ✅ NEW: Track successful signin
+        analytics.track('Signin Successful', {
+          email: email
+        })
       }
     } catch (error: any) {
       console.error('❌ Auth error:', error)
       setAuthError(error.message || 'Authentication failed')
+      
+      // ✅ NEW: Track auth error
+      analytics.track('Auth Error', {
+        auth_type: isSignUp ? 'signup' : 'signin',
+        error_message: error.message || 'Authentication failed',
+        email: email
+      })
     } finally {
       setAuthLoading(false)
     }
@@ -129,6 +212,12 @@ export default function HomePage() {
   const handleConnectInstagram = () => {
     console.log('📸 Starting Instagram connection...')
     console.log('- Current user:', !!user, user?.id)
+    
+    // ✅ NEW: Track Instagram connection attempt
+    analytics.track('Instagram Connection Started', {
+      user_id: user?.id,
+      user_email: user?.email
+    }, user?.id)
     
     if (user?.id) {
       // Store user ID in multiple places as backup
@@ -146,12 +235,22 @@ export default function HomePage() {
       window.location.href = authUrl
     } else {
       console.error('❌ No user ID to store')
+      
+      // ✅ NEW: Track missing user error
+      analytics.track('Instagram Connection Error - No User ID')
       return
     }
   }
 
   const handleLogout = async () => {
     console.log('🚪 Logging out...')
+    
+    // ✅ NEW: Track logout attempt
+    analytics.track('Logout Started', {
+      user_id: user?.id,
+      had_instagram: !!instagramAccount
+    }, user?.id)
+    
     try {
       sessionStorage.removeItem('socialsage_user_id')
       sessionStorage.removeItem('socialsage_user_email')
@@ -160,8 +259,19 @@ export default function HomePage() {
       const { error } = await supabase.auth.signOut()
       if (error) {
         console.error('❌ Logout error:', error)
+        
+        // ✅ NEW: Track logout error
+        analytics.track('Logout Error', {
+          error_message: error.message,
+          user_id: user?.id
+        }, user?.id)
       } else {
         console.log('✅ Logged out successfully')
+        
+        // ✅ NEW: Track successful logout
+        analytics.track('Logout Successful', {
+          user_id: user?.id
+        }, user?.id)
       }
       
       setUser(null)
@@ -170,31 +280,48 @@ export default function HomePage() {
       setEmail('')
       setPassword('')
       setAuthError('')
-      setShowDataManagement(false) // Reset data management view
+      setShowDataManagement(false)
       
     } catch (error) {
       console.error('❌ Error during logout:', error)
+      
+      // ✅ NEW: Track logout exception
+      analytics.track('Logout Exception', {
+        error_message: error instanceof Error ? error.message : 'Unknown error',
+        user_id: user?.id
+      }, user?.id)
     }
   }
 
-  // NEW: Handle data management navigation
   const handleDataManagementAccess = () => {
+    // ✅ NEW: Track data management access
+    analytics.track('Data Management Accessed', {
+      user_id: user?.id
+    }, user?.id)
+    
     setShowDataManagement(true)
   }
 
-  // Loading state
+  // ✅ UPDATED: Enhanced loading state with analytics tracking
   if (isLoading) {
     console.log('⏳ Showing loading state')
     return (
       <div className="w-full min-h-screen bg-white flex flex-col">
-        <div className="flex-1 flex items-center justify-center">
+        <ProgressiveLoadingState
+          isLoading={isLoading}
+          loadingMessage="Loading your account..."
+          className="flex-1"
+          userId={user?.id}
+          loadingContext="initial_app_load"
+        >
+          {/* Keep your existing loading UI */}
           <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-        </div>
+        </ProgressiveLoadingState>
       </div>
     )
   }
 
-  // NEW: Show data management if requested and user is signed in
+  // Show data management if requested and user is signed in
   if (showDataManagement && user) {
     return <AccountDataManagement onBack={() => setShowDataManagement(false)} />
   }
@@ -214,7 +341,12 @@ export default function HomePage() {
             {/* Toggle between Sign In / Sign Up */}
             <div className="flex mb-6">
               <button
-                onClick={() => {setIsSignUp(false); setAuthError('')}}
+                onClick={() => {
+                  setIsSignUp(false); 
+                  setAuthError('');
+                  // ✅ NEW: Track auth mode switch
+                  analytics.track('Auth Mode Switch', { mode: 'signin' });
+                }}
                 className={`flex-1 py-2 text-sm font-medium rounded-l-lg ${
                   !isSignUp 
                     ? 'bg-blue-500 text-white' 
@@ -224,7 +356,12 @@ export default function HomePage() {
                 Sign In
               </button>
               <button
-                onClick={() => {setIsSignUp(true); setAuthError('')}}
+                onClick={() => {
+                  setIsSignUp(true); 
+                  setAuthError('');
+                  // ✅ NEW: Track auth mode switch
+                  analytics.track('Auth Mode Switch', { mode: 'signup' });
+                }}
                 className={`flex-1 py-2 text-sm font-medium rounded-r-lg ${
                   isSignUp 
                     ? 'bg-blue-500 text-white' 
@@ -265,13 +402,29 @@ export default function HomePage() {
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-2xl py-3 font-medium hover:shadow-lg transition-all disabled:opacity-50"
-              >
-                {authLoading ? 'Loading...' : (isSignUp ? 'Sign Up' : 'Sign In')}
-              </button>
+              {/* ✅ UPDATED: Enhanced auth loading state */}
+              {authLoading ? (
+                <ProgressiveLoadingState
+                  isLoading={authLoading}
+                  loadingMessage={isSignUp ? "Creating your account..." : "Signing you in..."}
+                  className="w-full py-3"
+                  loadingContext={isSignUp ? "user_signup" : "user_signin"}
+                >
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                    <span className="text-white text-sm">
+                      {isSignUp ? "Creating account..." : "Signing in..."}
+                    </span>
+                  </div>
+                </ProgressiveLoadingState>
+              ) : (
+                <button
+                  type="submit"
+                  className="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-2xl py-3 font-medium hover:shadow-lg transition-all"
+                >
+                  {isSignUp ? 'Sign Up' : 'Sign In'}
+                </button>
+              )}
             </form>
 
             <div className="text-center mt-4 space-y-2">
@@ -303,15 +456,17 @@ export default function HomePage() {
                 }
               </p>
 
-              {/* NEW: Data management link for non-users */}
+              {/* Data management link for non-users */}
               <div className="pt-4 border-t border-gray-200 mt-4">
                 <p className="text-xs text-gray-500 mb-2">
                   Need to delete your data?
                 </p>
                 <a 
-                  href="/data-deletion"
-                  className="text-blue-600 hover:text-blue-800 underline text-xs font-medium"
-                >
+  href="/data-deletion"
+  target="_blank"
+  rel="noopener noreferrer"
+  className="text-blue-600 hover:text-blue-800 underline text-xs font-medium"
+>
                   📄 View Data Deletion Instructions
                 </a>
               </div>
@@ -330,7 +485,6 @@ export default function HomePage() {
         <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
           {/* Header with logout and data management */}
           <div className="absolute top-4 right-4 flex space-x-2">
-            {/* NEW: Data management button */}
             <button
               onClick={handleDataManagementAccess}
               className="bg-gray-500 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -405,5 +559,13 @@ export default function HomePage() {
 
   // Signed in with Instagram account - show the main dashboard
   console.log('🎉 Showing main app - user and Instagram connected')
+  
+  // ✅ NEW: Track successful app load
+  analytics.track('App Fully Loaded', {
+    user_id: user.id,
+    instagram_username: instagramAccount.username,
+    load_time: Date.now() // You could calculate actual load time
+  }, user.id)
+  
   return <SocialSageMobile />
 }
