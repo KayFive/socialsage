@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Home, BarChart3, Bell, User, Plus, TrendingUp, Users, Heart, MessageCircle, Bookmark, MoreHorizontal } from 'lucide-react';
+import { Home, BarChart3, Bell, User, Plus, TrendingUp, Users, Heart, MessageCircle, Bookmark, MoreHorizontal, ChevronDown, ChevronRight, Target, Clock, Zap, TestTube, Search, BookOpen } from 'lucide-react';
 import { AuthService } from '@/lib/auth'
 import { useAnalytics, ClickTracker, ViewTracker } from '@/components/AnalyticsProvider'
 import AccountDataManagement from '@/components/AccountDataManagement'
+
 
 // Type definitions
 interface Metric {
@@ -125,6 +126,7 @@ interface InstagramPost {
   profile_visits?: number;
   website_clicks?: number;
   saves?: number;
+  comments?: Comment[];
 }
 
 interface InstagramData {
@@ -233,6 +235,7 @@ const SocialSageMobile = () => {
   const [instagramData, setInstagramData] = useState<InstagramData | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
   // Analytics tracking
   const { trackFeature, trackEngagement, trackFunnel } = useAnalytics()
@@ -289,77 +292,109 @@ const SocialSageMobile = () => {
   }
 }
 
-  // Fetch real Instagram data with tracking
-  useEffect(() => {
-    const fetchInstagramData = async () => {
-      console.log('📡 SocialSage: Fetching Instagram data...');
-      setIsLoadingData(true);
+// Fetch Instagram data function (moved outside useEffect)
+const fetchInstagramData = useCallback(async () => {
+  console.log('📡 SocialSage: Fetching Instagram data...');
+  setIsLoadingData(true);
+  
+  // Track data fetch attempt
+  trackEngagement('instagram_data_fetch_started')
+  
+  try {
+    const response = await fetch('/api/instagram/metrics');
+    console.log('📊 SocialSage: API Response status:', response.status);
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('🔍 SocialSage: Instagram API Response:', data);
+      setInstagramData(data);
+      setDataError(null);
       
-      // Track data fetch attempt
-      trackEngagement('instagram_data_fetch_started')
+      // 🆕 NEW: Track when we last refreshed
+      setLastRefreshTime(new Date());
       
-      try {
-        const response = await fetch('/api/instagram/metrics');
-        console.log('📊 SocialSage: API Response status:', response.status);
+      // Track successful data fetch
+      trackEngagement('instagram_data_fetch_success', {
+        followers: data.followers,
+        posts_count: data.recentPosts?.length || 0,
+        engagement_rate: data.engagementRate,
+        has_insights: !!data.accountInsights
+      })
+      
+      // Track Instagram connection status
+      if (data.followers > 0) {
+        trackEngagement('instagram_connected_detected', {
+          follower_count: data.followers,
+          account_type: data.followers < 1000 ? 'micro' : data.followers < 10000 ? 'small' : 'large'
+        })
         
-        if (response.ok) {
-          const data = await response.json();
-          console.log('🔍 SocialSage: Instagram API Response:', data);
-          setInstagramData(data);
-          setDataError(null);
-          
-          // Track successful data fetch
-          trackEngagement('instagram_data_fetch_success', {
-            followers: data.followers,
-            posts_count: data.recentPosts?.length || 0,
-            engagement_rate: data.engagementRate,
-            has_insights: !!data.accountInsights
-          })
-          
-          // Track Instagram connection status
-          if (data.followers > 0) {
-            trackEngagement('instagram_connected_detected', {
-              follower_count: data.followers,
-              account_type: data.followers < 1000 ? 'micro' : data.followers < 10000 ? 'small' : 'large'
-            })
-            
-            // Complete Instagram onboarding funnel
-            trackFunnel('instagram_onboarding', 'data_loaded', 3, true, {
-              followers: data.followers
-            })
-          }
-          
-        } else {
-          const error = await response.json();
-          console.error('❌ SocialSage: API Error:', error);
-          setDataError(error.error || 'Failed to fetch Instagram data');
-          
-          // Track data fetch error
-          trackEngagement('instagram_data_fetch_failed', {
-            error: error.error,
-            status_code: response.status
-          })
-        }
-      } catch (error) {
-        console.error('❌ SocialSage: Failed to fetch Instagram data:', error);
-        setDataError('Network error while fetching data. Please check your Instagram connection.');
-        
-        // Track network error
-        trackEngagement('instagram_data_fetch_error', {
-          error: error instanceof Error ? error.message : String(error),
-          error_type: 'network'
+        // Complete Instagram onboarding funnel
+        trackFunnel('instagram_onboarding', 'data_loaded', 3, true, {
+          followers: data.followers
         })
       }
       
-      setIsLoadingData(false);
-    };
-
-    fetchInstagramData();
+    } else {
+      const error = await response.json();
+      console.error('❌ SocialSage: API Error:', error);
+      setDataError(error.error || 'Failed to fetch Instagram data');
+      
+      // Track data fetch error
+      trackEngagement('instagram_data_fetch_failed', {
+        error: error.error,
+        status_code: response.status
+      })
+    }
+  } catch (error) {
+    console.error('❌ SocialSage: Failed to fetch Instagram data:', error);
+    setDataError('Network error while fetching data. Please check your Instagram connection.');
     
-    // Refresh data every 5 minutes
-    const interval = setInterval(fetchInstagramData, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
+    // Track network error
+    trackEngagement('instagram_data_fetch_error', {
+      error: error instanceof Error ? error.message : String(error),
+      error_type: 'network'
+    })
+  }
+  
+  setIsLoadingData(false);
+}, [trackEngagement, trackFunnel]);
+
+// Simple useEffect - only fetch once on mount (NO auto-refresh!)
+useEffect(() => {
+  fetchInstagramData();
+}, [fetchInstagramData]);
+
+// Manual refresh function
+const handleManualRefresh = useCallback(async () => {
+  trackEngagement('manual_refresh_triggered', {
+    last_refresh_ago_minutes: lastRefreshTime ? 
+      Math.round((Date.now() - lastRefreshTime.getTime()) / (1000 * 60)) : 
+      null
+  });
+  
+  await fetchInstagramData();
+}, [lastRefreshTime, trackEngagement, fetchInstagramData]);
+
+// Smart refresh when user returns after being away
+useEffect(() => {
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible' && lastRefreshTime) {
+      const minutesSinceLastRefresh = (Date.now() - lastRefreshTime.getTime()) / (1000 * 60);
+      
+      // Only refresh if it's been more than 30 minutes since last refresh
+      if (minutesSinceLastRefresh > 30) {
+        console.log('📱 User returned after 30+ minutes, refreshing data...');
+        trackEngagement('auto_refresh_on_return', {
+          minutes_away: Math.round(minutesSinceLastRefresh)
+        });
+        fetchInstagramData();
+      }
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+}, [lastRefreshTime, fetchInstagramData, trackEngagement]);
 
   // Add this useEffect to scroll to top when changing views
 useEffect(() => {
@@ -775,6 +810,209 @@ useEffect(() => {
   };
 };
 
+function analyzeSentiment(posts: InstagramPost[]) {
+  if (!posts || posts.length === 0) return null;
+
+  // Expanded positive keywords for social media
+  const positiveKeywords = [
+    // Basic positive words
+    'love', 'amazing', 'awesome', 'great', 'perfect', 'beautiful', 'best', 'fantastic',
+    'wonderful', 'excellent', 'incredible', 'outstanding', 'brilliant', 'superb',
+    'good', 'nice', 'cool', 'wow', 'yes', 'absolutely', 'definitely',
+    
+    // Social media slang & expressions
+    'slay', 'slaying', 'iconic', 'legend', 'queen', 'king', 'goals', 'fire', 'lit', 'vibes', 'vibe',
+    'mood', 'aesthetic', 'clean', 'fresh', 'smooth', 'crisp', 'stunning', 'gorgeous',
+    'obsessed', 'obsessing', 'stan', 'stanning', 'ship', 'shipping', 'living for this',
+    'here for it', 'here for this', 'all for it', 'so here for this',
+    
+    // Achievement & praise terms
+    'nailed it', 'killed it', 'crushed it', 'smashed it', 'ate and left no crumbs',
+    'main character', 'main character energy', 'chef kiss', 'chefs kiss', 'perfection',
+    'flawless', 'immaculate', 'divine', 'ethereal', 'dreamy',
+    
+    // Internet abbreviations & expressions  
+    'omg', 'omfg', 'lol', 'lmao', 'lmfao', 'rofl', 'tbh', 'ngl', 'fr', 'periodt', 'period',
+    'facts', 'fax', 'no cap', 'no printer', 'this is it', 'this it',
+    'based', 'valid', 'understood the assignment', 'assignment understood',
+    
+    // Excitement expressions
+    'screaming', 'crying', 'dead', 'deceased', 'gone', 'sent me', 'sending me',
+    'cannot', 'cant', 'cant even', 'i cant', 'im done', 'done for', 'finished',
+    'not me', 'not you', 'the way i', 'the way you', 'respectfully',
+    
+    // Appreciation & support
+    'appreciate', 'grateful', 'blessed', 'thankful', 'thanks', 'thank you', 'tysm',
+    'inspiring', 'inspired', 'motivating', 'motivated', 'helpful', 'needed this',
+    'came for me', 'called out', 'read me', 'understood', 'felt that', 'relate',
+    
+    // Content appreciation
+    'quality', 'content', 'educational', 'informative', 'helpful', 'useful', 'valuable',
+    'entertaining', 'funny', 'hilarious', 'comedy', 'humor', 'laugh', 'laughing',
+    'relatable', 'real', 'authentic', 'genuine', 'honest', 'raw', 'vulnerable',
+    
+    // Agreement & validation
+    'exactly', 'precisely', 'absolutely', 'totally', 'completely', 'agree', 'agreed',
+    'same', 'me too', 'also me', 'literally me', 'this me', 'big mood', 'whole mood',
+    
+    // Variations with emphasis
+    'amazinggg', 'loveee', 'yesss', 'sooo good', 'sooo cute', 'prettyyyy', 'perfecttt'
+  ];
+
+  const negativeKeywords = [
+    // Basic negative words
+    'hate', 'hating', 'terrible', 'awful', 'bad', 'worst', 'horrible', 'disappointing',
+    'annoying', 'boring', 'stupid', 'dumb', 'waste', 'useless', 'pointless',
+    'disagree', 'wrong', 'fail', 'failed', 'failure', 'disappointed', 'angry', 'mad',
+    
+    // Social media criticism & slang
+    'cringe', 'cringey', 'cringing', 'ick', 'icky', 'gross', 'disgusting', 'nasty',
+    'toxic', 'problematic', 'red flag', 'red flags', 'sus', 'suspicious', 'sketchy',
+    'weird', 'odd', 'strange', 'creepy', 'uncomfortable', 'awkward',
+    
+    // Internet negativity & dismissiveness
+    'mid', 'mid af', 'trash', 'garbage', 'flop', 'flopped', 'flopping', 'fail',
+    'ratio', 'ratioed', 'cap', 'capping', 'lying', 'lie', 'lies', 'fake',
+    'phony', 'fraud', 'scam', 'scammer', 'catfish',
+    
+    // Disappointment expressions
+    'not it', 'aint it', 'this aint it', 'miss', 'missed', 'flop era', 'fallen off',
+    'used to be', 'what happened', 'disappointed', 'let down', 'expected better',
+    
+    // Criticism & negativity
+    'overrated', 'overhyped', 'try hard', 'trying too hard', 'desperate', 'attention seeking',
+    'pick me', 'basic', 'mainstream', 'generic', 'copied', 'unoriginal',
+    'boring', 'bland', 'plain', 'meh', 'okay i guess', 'could be better',
+    
+    // Dismissive responses
+    'whatever', 'sure jan', 'okay karen', 'karen', 'boomer', 'ok boomer',
+    'delete this', 'delete', 'remove', 'take this down', 'stop', 'quit', 'enough',
+    'no one asked', 'didnt ask', 'who asked', 'nobody cares', 'dont care'
+  ];
+
+  const positiveEmojis = [
+    '😍', '🥰', '😘', '💕', '❤️', '💖', '💗', '💓', '🔥', '✨', '👏', '🙌', '💯', '👍',
+    '😊', '😀', '😃', '😄', '🤩', '😻', '💪', '🌟', '⭐', '💎', '🏆', '🎉', '🎊', '🥳'
+  ];
+
+  const negativeEmojis = [
+    '😠', '😡', '🤬', '😤', '🙄', '😒', '😞', '😢', '😭', '💔', '👎', '🤮',
+    '😷', '🤢', '😵', '😫', '😩', '😖', '😣', '😰', '😨', '🚫', '❌', '💸'
+  ];
+
+  // Analyze sentiment by content type and time
+  const sentimentByType = new Map();
+  const sentimentOverTime = new Map();
+  let totalComments = 0;
+  let totalPositive = 0;
+  let totalNegative = 0;
+  let totalNeutral = 0;
+
+  posts.forEach(post => {
+    if (!post.comments || post.comments.length === 0) return;
+
+    const contentType = post.media_type === 'VIDEO' ? 'Reels' : 
+                       post.media_type === 'CAROUSEL_ALBUM' ? 'Carousels' : 'Posts';
+    
+    const postDate = new Date(post.timestamp);
+    const monthKey = `${postDate.getFullYear()}-${String(postDate.getMonth() + 1).padStart(2, '0')}`;
+
+    if (!sentimentByType.has(contentType)) {
+      sentimentByType.set(contentType, { positive: 0, negative: 0, neutral: 0, total: 0 });
+    }
+
+    if (!sentimentOverTime.has(monthKey)) {
+      sentimentOverTime.set(monthKey, { positive: 0, negative: 0, neutral: 0, total: 0, date: postDate });
+    }
+
+    const typeData = sentimentByType.get(contentType);
+    const timeData = sentimentOverTime.get(monthKey);
+
+    post.comments.forEach(comment => {
+      const text = (comment as any).text?.toLowerCase?.() || '';
+      let sentiment = 'neutral';
+      let score = 0;
+
+      // Check for positive keywords and emojis
+      positiveKeywords.forEach(word => {
+        if (text.includes(word)) score += 1;
+      });
+      positiveEmojis.forEach(emoji => {
+        if (text.includes(emoji)) score += 1;
+      });
+
+      // Check for negative keywords and emojis
+      negativeKeywords.forEach(word => {
+        if (text.includes(word)) score -= 1;
+      });
+      negativeEmojis.forEach(emoji => {
+        if (text.includes(emoji)) score -= 1;
+      });
+
+      // Determine sentiment
+      if (score > 0) sentiment = 'positive';
+      else if (score < 0) sentiment = 'negative';
+
+      // Update counters
+      typeData[sentiment]++;
+      typeData.total++;
+      timeData[sentiment]++;
+      timeData.total++;
+      
+      if (sentiment === 'positive') totalPositive++;
+      else if (sentiment === 'negative') totalNegative++;
+      else totalNeutral++;
+      
+      totalComments++;
+    });
+  });
+
+  // Calculate overall sentiment
+  const overallSentiment = {
+    positive: totalComments > 0 ? Math.round((totalPositive / totalComments) * 100) : 0,
+    negative: totalComments > 0 ? Math.round((totalNegative / totalComments) * 100) : 0,
+    neutral: totalComments > 0 ? Math.round((totalNeutral / totalComments) * 100) : 0,
+    totalComments
+  };
+
+  // Convert to arrays and calculate insights
+  const contentTypeAnalysis = Array.from(sentimentByType.entries()).map(([type, data]) => ({
+    contentType: type,
+    positive: data.total > 0 ? Math.round((data.positive / data.total) * 100) : 0,
+    negative: data.total > 0 ? Math.round((data.negative / data.total) * 100) : 0,
+    neutral: data.total > 0 ? Math.round((data.neutral / data.total) * 100) : 0,
+    totalComments: data.total,
+    sentiment_score: data.total > 0 ? Math.round(((data.positive - data.negative) / data.total) * 100) : 0
+  })).sort((a, b) => b.sentiment_score - a.sentiment_score);
+
+  const timeAnalysis = Array.from(sentimentOverTime.entries())
+    .map(([month, data]) => ({
+      month,
+      positive: data.total > 0 ? Math.round((data.positive / data.total) * 100) : 0,
+      negative: data.total > 0 ? Math.round((data.negative / data.total) * 100) : 0,
+      neutral: data.total > 0 ? Math.round((data.neutral / data.total) * 100) : 0,
+      totalComments: data.total,
+      sentiment_score: data.total > 0 ? Math.round(((data.positive - data.negative) / data.total) * 100) : 0,
+      date: data.date
+    }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .slice(-6); // Last 6 months
+
+  return {
+    overallSentiment,
+    contentTypeAnalysis,
+    timeAnalysis,
+    insights: {
+      bestContentType: contentTypeAnalysis[0]?.contentType || null,
+      sentimentTrend: timeAnalysis.length > 1 ? 
+        (timeAnalysis[timeAnalysis.length - 1].sentiment_score > timeAnalysis[timeAnalysis.length - 2].sentiment_score ? 'improving' : 'declining') : 
+        'stable',
+      averageSentimentScore: contentTypeAnalysis.length > 0 ? 
+        Math.round(contentTypeAnalysis.reduce((sum, type) => sum + type.sentiment_score, 0) / contentTypeAnalysis.length) : 0
+    }
+  };
+}
+
   // Helper function to truncate caption
   const truncateCaption = (caption: string, maxLength: number = 50) => {
     if (!caption) return "Instagram Post";
@@ -815,6 +1053,296 @@ useEffect(() => {
     if (likes >= avgLikes * 0.8) return 'medium';
     return 'low';
   };
+
+  // ===== ENHANCED ANALYTICS FUNCTIONS =====
+
+// 1. GROWTH POTENTIAL ANALYSIS
+const analyzeDiscoveryPotential = (posts: InstagramPost[]) => {
+  if (!posts || posts.length === 0) return null;
+
+  const contentTypeAnalysis = posts.reduce((acc: any, post: InstagramPost) => {
+    const type = post.media_type || 'IMAGE';
+    if (!acc[type]) {
+      acc[type] = {
+        totalReach: 0,
+        totalProfileVisits: 0,
+        totalEngagement: 0,
+        totalImpressions: 0,
+        count: 0,
+        posts: []
+      };
+    }
+    
+    acc[type].totalReach += post.reach || 0;
+    acc[type].totalProfileVisits += post.profile_visits || 0;
+    acc[type].totalEngagement += (post.like_count || 0) + (post.comments_count || 0);
+    acc[type].totalImpressions += post.impressions || 0;
+    acc[type].count += 1;
+    acc[type].posts.push(post);
+    
+    return acc;
+  }, {});
+
+  return Object.entries(contentTypeAnalysis).map(([type, data]: [string, any]) => {
+    const avgReach = data.totalReach / data.count;
+    const avgProfileVisits = data.totalProfileVisits / data.count;
+    const avgEngagement = data.totalEngagement / data.count;
+    
+    // Profile visit conversion rate
+    const profileVisitRate = data.totalReach > 0 ? (data.totalProfileVisits / data.totalReach) * 100 : 0;
+    
+    // Discovery score combines reach and conversion
+    const discoveryScore = avgReach * 0.6 + avgProfileVisits * 0.4;
+
+    return {
+      contentType: type,
+      label: type === 'VIDEO' ? 'Reels' : type === 'CAROUSEL_ALBUM' ? 'Carousels' : 'Posts',
+      sampleSize: data.count,
+      avgReach: Math.round(avgReach),
+      avgProfileVisits: Math.round(avgProfileVisits),
+      avgEngagement: Math.round(avgEngagement),
+      profileVisitRate: profileVisitRate.toFixed(2),
+      discoveryScore: Math.round(discoveryScore),
+      topPerformingPost: data.posts.sort((a: InstagramPost, b: InstagramPost) => (b.reach || 0) - (a.reach || 0))[0]
+    };
+  }).sort((a: any, b: any) => b.discoveryScore - a.discoveryScore);
+};
+
+// 2. REACH OPTIMIZATION ANALYSIS
+const analyzeReachOptimization = (posts: InstagramPost[], followers: number) => {
+  if (!posts || posts.length === 0) return null;
+
+  const totalReach = posts.reduce((sum: number, post: InstagramPost) => sum + (post.reach || 0), 0);
+  const avgReach = totalReach / posts.length;
+  
+  const reachToFollowerRatio = followers > 0 ? (avgReach / followers) * 100 : 0;
+  const postsReachingBeyondFollowers = posts.filter((post: InstagramPost) => (post.reach || 0) > followers * 0.8).length;
+  
+  return {
+    avgReach: Math.round(avgReach),
+    reachToFollowerRatio: reachToFollowerRatio.toFixed(1),
+    postsReachingBeyondFollowers,
+    totalReachLast30Days: Math.round(totalReach)
+  };
+};
+
+// 3. ENGAGEMENT QUALITY ANALYSIS (Updated - No Shares)
+const analyzeEngagementQuality = (posts: InstagramPost[]) => {
+  if (!posts || posts.length === 0) return null;
+
+  const engagementMetrics = posts.map((post: InstagramPost) => {
+    const likes = post.like_count || 0;
+    const comments = post.comments_count || 0;
+    const saves = post.saves || 0;
+    
+    return {
+      commentToLikeRatio: likes > 0 ? (comments / likes) * 100 : 0,
+      saveToLikeRatio: likes > 0 ? (saves / likes) * 100 : 0
+    };
+  });
+
+  const avgSaveToLikeRatio = (engagementMetrics.reduce((sum: number, m: any) => sum + m.saveToLikeRatio, 0) / engagementMetrics.length).toFixed(2);
+  const avgCommentToLikeRatio = (engagementMetrics.reduce((sum: number, m: any) => sum + m.commentToLikeRatio, 0) / engagementMetrics.length).toFixed(2);
+  
+  // Updated criteria without shares
+  const highValuePosts = engagementMetrics.filter((m: any) => 
+    m.saveToLikeRatio > 5 || m.commentToLikeRatio > 8
+  ).length;
+
+  return {
+    avgSaveToLikeRatio,
+    avgCommentToLikeRatio,
+    highValuePostsPercentage: ((highValuePosts / posts.length) * 100).toFixed(1),
+    qualityRating: parseFloat(avgSaveToLikeRatio) > 4 ? 'Excellent' : 
+                   parseFloat(avgSaveToLikeRatio) > 2.5 ? 'Good' : 'Needs Improvement'
+  };
+};
+
+// 4. A/B TESTING SUGGESTIONS
+const generateABTestSuggestions = (posts: InstagramPost[], timingData?: any, frequencyData?: any) => {
+  const suggestions: any[] = [];
+
+  // Timing A/B tests
+  if (timingData?.timeSlots?.length >= 2) {
+    const topTime = timingData.timeSlots[0];
+    const secondTime = timingData.timeSlots[1];
+    suggestions.push({
+      type: 'Timing',
+      hypothesis: `${topTime.time} vs ${secondTime.time} for your best content type`,
+      description: `Test posting identical content at ${topTime.time} (avg: ${topTime.avgLikes} likes) vs ${secondTime.time} (avg: ${secondTime.avgLikes} likes)`,
+      confidence: topTime.postCount >= 3 && secondTime.postCount >= 3 ? 'High' : 'Medium',
+      duration: '2 weeks',
+      metric: 'Engagement rate in first 24 hours',
+      expectedOutcome: '15-20% difference in engagement'
+    });
+  }
+
+  // Content type A/B tests
+  const contentTypes = analyzeDiscoveryPotential(posts);
+  if (contentTypes && contentTypes.length >= 2) {
+    const bestType = contentTypes[0];
+    const secondType = contentTypes[1];
+    suggestions.push({
+      type: 'Content Format',
+      hypothesis: `${bestType.label} vs ${secondType.label} for educational content`,
+      description: `Create the same educational content as ${bestType.label} vs ${secondType.label}`,
+      confidence: 'High',
+      duration: '3 weeks',
+      metric: 'Total reach and profile visits',
+      expectedOutcome: `${bestType.label} may get ${((bestType.avgReach - secondType.avgReach) / secondType.avgReach * 100).toFixed(0)}% more reach`
+    });
+  }
+
+  return suggestions;
+};
+
+// 5. CONTENT GAP ANALYSIS
+const analyzeContentGaps = (posts: InstagramPost[]): any[] => {
+  if (!posts || posts.length === 0) return [];
+  
+  const now = new Date();
+  const gaps: any[] = [];
+
+  // Content type gaps
+  const contentTypeCounts: { [key: string]: number } = { VIDEO: 0, CAROUSEL_ALBUM: 0, IMAGE: 0 };
+  const lastPostByType: { [key: string]: string | null } = { VIDEO: null, CAROUSEL_ALBUM: null, IMAGE: null };
+  
+  posts.forEach((post: InstagramPost) => {
+    const type = post.media_type || 'IMAGE';
+    contentTypeCounts[type]++;
+    
+    const postDate = new Date(post.timestamp);
+    if (!lastPostByType[type] || postDate > new Date(lastPostByType[type]!)) {
+      lastPostByType[type] = post.timestamp;
+    }
+  });
+
+  // Check for content type gaps
+  Object.entries(lastPostByType).forEach(([type, lastPost]: [string, string | null]) => {
+    if (lastPost) {
+      const daysSinceLastPost = Math.floor((now.getTime() - new Date(lastPost).getTime()) / (1000 * 60 * 60 * 24));
+      const typeLabel = type === 'VIDEO' ? 'Reel' : type === 'CAROUSEL_ALBUM' ? 'Carousel' : 'Single Post';
+      
+      if (daysSinceLastPost > 7) {
+        gaps.push({
+          type: 'Content Type Gap',
+          description: `Haven't posted a ${typeLabel} in ${daysSinceLastPost} days`,
+          priority: 'Medium',
+          suggestion: `Consider creating a ${typeLabel} - they typically get good engagement`
+        });
+      }
+    }
+  });
+
+  return gaps;
+};
+
+// 6. DAY OF WEEK PERFORMANCE ANALYSIS
+const analyzeDayOfWeekPerformance = (posts: InstagramPost[]) => {
+  if (!posts || posts.length === 0) return null;
+
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayMetrics = Array(7).fill(null).map(() => ({ 
+  posts: [] as InstagramPost[], totalEngagement: 0, totalReach: 0, count: 0 
+}));
+
+  posts.forEach((post: InstagramPost) => {
+    const dayOfWeek = new Date(post.timestamp).getDay();
+    const engagement = (post.like_count || 0) + (post.comments_count || 0);
+    
+    dayMetrics[dayOfWeek].posts.push(post);
+    dayMetrics[dayOfWeek].totalEngagement += engagement;
+    dayMetrics[dayOfWeek].totalReach += post.reach || 0;
+    dayMetrics[dayOfWeek].count += 1;
+  });
+
+  return dayMetrics.map((metrics: any, index: number) => ({
+    day: dayNames[index],
+    avgEngagement: metrics.count > 0 ? Math.round(metrics.totalEngagement / metrics.count) : 0,
+    avgReach: metrics.count > 0 ? Math.round(metrics.totalReach / metrics.count) : 0,
+    postCount: metrics.count,
+    engagementRate: metrics.totalReach > 0 ? 
+      ((metrics.totalEngagement / metrics.totalReach) * 100).toFixed(1) : '0'
+  })).sort((a: any, b: any) => b.avgEngagement - a.avgEngagement);
+};
+
+// ===== UI COMPONENTS =====
+
+interface ExpandableInsightProps {
+  title: string;
+  icon: string;
+  summary: string;
+  children: React.ReactNode;
+  defaultExpanded?: boolean;
+}
+
+const ExpandableInsight: React.FC<ExpandableInsightProps> = ({ title, icon, summary, children, defaultExpanded = false }) => {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full p-4 text-left hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <span className="text-2xl">{icon}</span>
+            <div>
+              <h4 className="font-semibold text-gray-900">{title}</h4>
+              <p className="text-sm text-gray-600">{summary}</p>
+            </div>
+          </div>
+          {isExpanded ? (
+            <ChevronDown className="w-5 h-5 text-gray-400" />
+          ) : (
+            <ChevronRight className="w-5 h-5 text-gray-400" />
+          )}
+        </div>
+      </button>
+      {isExpanded && (
+        <div className="px-4 pb-4 border-t border-gray-100">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface PerformanceBarProps {
+  label: string;
+  value: number;
+  maxValue: number;
+  color?: string;
+}
+
+const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue, color = "blue" }) => {
+  const percentage = maxValue > 0 ? (value / maxValue) * 100 : 0;
+  const colorClasses: { [key: string]: string } = {
+    blue: "bg-blue-500",
+    purple: "bg-purple-500",
+    green: "bg-green-500",
+    orange: "bg-orange-500",
+    gray: "bg-gray-400"
+  };
+
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-sm text-gray-700">{label}</span>
+      <div className="flex items-center space-x-2">
+        <div className="w-20 bg-gray-200 rounded-full h-2">
+          <div 
+            className={`h-2 rounded-full ${colorClasses[color]}`}
+            style={{width: `${Math.min(percentage, 100)}%`}}
+          ></div>
+        </div>
+        <span className="text-sm font-bold text-gray-900 min-w-[40px]">
+          {value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toLocaleString()}
+        </span>
+      </div>
+    </div>
+  );
+};
 
   // Generate metric categories with real data
   const getMetricCategories = (): MetricCategory[] => {
@@ -980,7 +1508,11 @@ useEffect(() => {
     return baseCategories;
   };
 
-  const metricCategories = getMetricCategories();
+  const metricCategories = useMemo(() => getMetricCategories(), [
+  instagramData?.followers,
+  instagramData?.recentPosts?.length,
+  instagramData?.engagementRate
+]);
 
   // Track metric category selection with analytics
   const handleMetricCategorySelect = (categoryId: string) => {
@@ -1803,44 +2335,34 @@ useEffect(() => {
       const growthData = getCurrentGrowthData();
 
       const getTimeframeSpecificTotalMetrics = () => {
-  if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
+  // Only show account-level metrics for monthly view
+  if (growthTimeFrame !== 'monthly') {
+    return null;
+  }
+  
+  // Use account-level insights (30-day data)
+  if (instagramData?.accountInsights) {
     return {
-      totalReach: 0,
-      totalProfileVisits: 0,
-      totalImpressions: 0,
-      postsCount: 0
+      totalReach: instagramData.accountInsights.reach || 0,
+      totalProfileVisits: instagramData.accountInsights.profile_visits || 0,
+      totalImpressions: instagramData.accountInsights.impressions || 0,
+      postsCount: instagramData?.recentPosts?.filter(post => {
+        const postDate = new Date(post.timestamp);
+        const thirtyDaysAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000));
+        return postDate >= thirtyDaysAgo;
+      }).length || 0,
+      isAccountLevel: true,
+      timeframeDays: 30
     };
   }
 
-  const now = new Date();
-  const daysBack = growthTimeFrame === 'weekly' ? 7 : 30;
-  const cutoffDate = new Date(now.getTime() - (daysBack * 24 * 60 * 60 * 1000));
-
-  // Filter posts within the timeframe
-  const timeframePosts = instagramData.recentPosts.filter(post => {
-    const postDate = new Date(post.timestamp);
-    return postDate >= cutoffDate;
-  });
-
-  if (timeframePosts.length === 0) {
-    return {
-      totalReach: 0,
-      totalProfileVisits: 0,
-      totalImpressions: 0,
-      postsCount: 0
-    };
-  }
-
-  // Sum up the actual metrics from filtered posts
-  const totalReach = timeframePosts.reduce((sum, post) => sum + (post.reach || 0), 0);
-  const totalProfileVisits = timeframePosts.reduce((sum, post) => sum + (post.profile_visits || 0), 0);
-  const totalImpressions = timeframePosts.reduce((sum, post) => sum + (post.impressions || 0), 0);
-
+  // No account insights available
   return {
-    totalReach,
-    totalProfileVisits,
-    totalImpressions,
-    postsCount: timeframePosts.length
+    totalReach: 0,
+    totalProfileVisits: 0,
+    totalImpressions: 0,
+    postsCount: 0,
+    isAccountLevel: false
   };
 };
 
@@ -2043,17 +2565,22 @@ useEffect(() => {
               </div>
             </ViewTracker>
 
-            {/* Real Profile Performance using filtered post data */}
+            {/* Account Performance - Monthly Only */}
 {(() => {
   const timeframeMetrics = getTimeframeSpecificTotalMetrics();
   
-  // Only show if we have actual data for the timeframe
-  if (timeframeMetrics.postsCount === 0) {
+  // Only show for monthly timeframe
+  if (!timeframeMetrics || growthTimeFrame !== 'monthly') {
+    return null;
+  }
+  
+  // Show message if no account insights available
+  if (!timeframeMetrics.isAccountLevel) {
     return (
       <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
         <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
           <span className="mr-2">👁️</span>
-          Profile Performance ({growthTimeFrame === 'weekly' ? 'Last 7 Days' : 'Last 30 Days'})
+          Account Performance (Last 30 Days)
         </h3>
         
         <div className="text-center py-6">
@@ -2061,7 +2588,7 @@ useEffect(() => {
             <span className="text-gray-400 text-xl">📊</span>
           </div>
           <p className="text-gray-600 text-sm">
-            No posts in the {growthTimeFrame === 'weekly' ? 'last 7 days' : 'last 30 days'} to calculate reach metrics.
+            Account-level insights not available. Connect a Business or Creator Instagram account to see profile visits and total reach data.
           </p>
         </div>
       </div>
@@ -2070,7 +2597,7 @@ useEffect(() => {
 
   return (
     <ViewTracker
-      featureName="profile_performance_insights_filtered"
+      featureName="account_performance_insights"
       metadata={{
         timeframe: growthTimeFrame,
         posts_in_timeframe: timeframeMetrics.postsCount,
@@ -2080,21 +2607,19 @@ useEffect(() => {
       <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
         <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
           <span className="mr-2">👁️</span>
-          Profile Performance ({growthTimeFrame === 'weekly' ? 'Last 7 Days' : 'Last 30 Days'})
+          Account Performance (Last 30 Days)
         </h3>
         
         <div className="grid grid-cols-2 gap-4">
-          {timeframeMetrics.totalProfileVisits > 0 && (
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600 mb-1">
-                {timeframeMetrics.totalProfileVisits.toLocaleString()}
-              </div>
-              <div className="text-sm text-gray-600">Profile Visits</div>
-              <div className="text-xs text-gray-500 mt-1">
-                From {timeframeMetrics.postsCount} posts
-              </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-blue-600 mb-1">
+              {timeframeMetrics.totalProfileVisits.toLocaleString()}
             </div>
-          )}
+            <div className="text-sm text-gray-600">Total Profile Visits</div>
+            <div className="text-xs text-gray-500 mt-1">
+              30-day account total
+            </div>
+          </div>
           
           <div className="text-center">
             <div className="text-2xl font-bold text-emerald-600 mb-1">
@@ -2103,9 +2628,9 @@ useEffect(() => {
                 timeframeMetrics.totalReach.toLocaleString()
               }
             </div>
-            <div className="text-sm text-gray-600">Total Reach</div>
+            <div className="text-sm text-gray-600">Total Account Reach</div>
             <div className="text-xs text-gray-500 mt-1">
-              From {timeframeMetrics.postsCount} posts
+              30-day account total
             </div>
           </div>
 
@@ -2119,14 +2644,14 @@ useEffect(() => {
               </div>
               <div className="text-sm text-gray-600">Total Impressions</div>
               <div className="text-xs text-gray-500 mt-1">
-                From {timeframeMetrics.postsCount} posts
+                30-day account total
               </div>
             </div>
           )}
         </div>
 
         <div className="mt-4 text-xs text-gray-500 text-center">
-          Calculated from posts published in the {growthTimeFrame === 'weekly' ? 'last 7 days' : 'last 30 days'}
+          Account-level metrics • {timeframeMetrics.postsCount} posts published in last 30 days
         </div>
       </div>
     </ViewTracker>
@@ -2749,41 +3274,79 @@ useEffect(() => {
         <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200/50 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
           <h1 className="text-xl font-bold text-gray-900">SocialSage</h1>
           <div className="flex items-center space-x-2">
-            <ClickTracker
-  featureName="logout_button"
-  metadata={{ session_length: Date.now() - performance.timing?.navigationStart }}
->
-  <button 
-    onClick={handleLogout}
-    className="text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg min-w-[60px] touch-manipulation"
+  {/* 🆕 NEW: Manual refresh button */}
+  <ClickTracker
+    featureName="manual_refresh_button"
+    metadata={{ 
+      last_refresh_ago: lastRefreshTime ? Date.now() - lastRefreshTime.getTime() : null 
+    }}
   >
-    Logout
-  </button>
-</ClickTracker>
-            <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
-              <Plus className="w-4 h-4 text-white" />
-            </div>
-          </div>
+    <button 
+      onClick={handleManualRefresh}
+      disabled={isLoadingData}
+      className={`p-2 rounded-lg transition-colors ${
+        isLoadingData 
+          ? 'text-gray-400 cursor-not-allowed' 
+          : 'text-blue-600 hover:bg-blue-50'
+      }`}
+      title="Refresh data"
+    >
+      <div className={`w-4 h-4 ${isLoadingData ? 'animate-spin' : ''}`}>
+        {isLoadingData ? '⟳' : '↻'}
+      </div>
+    </button>
+  </ClickTracker>
+  
+  <ClickTracker
+    featureName="logout_button"
+    metadata={{ session_length: Date.now() - performance.timing?.navigationStart }}
+  >
+    <button 
+      onClick={handleLogout}
+      className="text-sm text-red-600 hover:text-red-700 px-3 py-2 rounded-lg min-w-[60px] touch-manipulation"
+    >
+      Logout
+    </button>
+  </ClickTracker>
+  <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
+    <Plus className="w-4 h-4 text-white" />
+  </div>
+</div>
         </div>
 
         {/* Data loading indicator */}
         {isLoadingData && (
-          <div className="px-4 py-2 bg-blue-50 border-b border-blue-200">
-            <div className="flex items-center space-x-2">
-              <div className="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-              <span className="text-blue-600 text-sm">Loading Instagram data...</span>
-            </div>
-          </div>
-        )}
+  <div className="px-4 py-2 bg-blue-50 border-b border-blue-200">
+    <div className="flex items-center space-x-2">
+      <div className="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+      <span className="text-blue-600 text-sm">Refreshing Instagram data...</span>
+    </div>
+  </div>
+)}
+
+{/* 🆕 NEW: Show last refresh time */}
+{lastRefreshTime && !isLoadingData && (
+  <div className="px-4 py-1 bg-gray-50 border-b border-gray-200">
+    <div className="text-xs text-gray-500 text-center">
+      Last updated: {lastRefreshTime.toLocaleTimeString()}
+    </div>
+  </div>
+)}
 
         {/* Data error indicator */}
         {dataError && (
-          <div className="px-4 py-2 bg-red-50 border-b border-red-200">
-            <div className="flex items-center space-x-2">
-              <span className="text-red-600 text-sm">⚠️ {dataError}</span>
-            </div>
-          </div>
-        )}
+  <div className="px-4 py-2 bg-red-50 border-b border-red-200">
+    <div className="flex items-center justify-between">
+      <span className="text-red-600 text-sm">⚠️ {dataError}</span>
+      <button 
+        onClick={handleManualRefresh}
+        className="text-red-700 hover:text-red-900 text-sm font-medium"
+      >
+        Retry
+      </button>
+    </div>
+  </div>
+)}
 
         <div className="p-4 bg-gradient-to-br from-blue-50 to-purple-50">
           <ClickTracker
@@ -3365,6 +3928,8 @@ useEffect(() => {
   const [selectedAccount, setSelectedAccount] = useState<Account | string>('');
   const [selectedDefinitionCategory, setSelectedDefinitionCategory] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showDetailedAnalysis, setShowDetailedAnalysis] = useState(false);
+  const [userPreference, setUserPreference] = useState('');
   const lastUsedVariationsRef = useRef<{[key: string]: string}>({});
 
   // Track AI insights usage
@@ -3376,930 +3941,238 @@ useEffect(() => {
     })
   }, [])
 
-  // Performance Classification System
-  const classifyPerformance = (metric: ValidMetric, data: InstagramData): PerformanceLevel => {
-    const followerCount = data.followers || 0;
-    
-    switch (metric) {
-      case 'engagement':
-        const engagementRate = parseFloat(data.engagementRate?.replace('%', '') || '0');
-        
-        // Adjust benchmarks by follower count
-        let goodThreshold, excellentThreshold;
-        
-        if (followerCount < 10000) {
-          goodThreshold = 4.0;   // Micro creators should see higher engagement
-          excellentThreshold = 7.0;
-        } else if (followerCount < 100000) {
-          goodThreshold = 3.0;   // Growing creators
-          excellentThreshold = 5.0;
-        } else {
-          goodThreshold = 2.0;   // Large creators
-          excellentThreshold = 3.5;
-        }
-        
-        if (engagementRate >= excellentThreshold) return 'positive';
-        if (engagementRate >= goodThreshold) return 'mixed';
-        return 'negative';
-        
-      case 'growth':
-        if (!data.growthData?.canCalculateWeekly) return 'neutral';
-        
-        const weeklyGrowth = parseFloat(data.growthRate?.replace(/[+%]/g, '') || '0');
-        
-        // Larger accounts naturally grow slower
-        let growthGood, growthExcellent;
-        
-        if (followerCount < 1000) {
-          growthGood = 2.0;      // Early creators can grow faster
-          growthExcellent = 5.0;
-        } else if (followerCount < 10000) {
-          growthGood = 1.5;
-          growthExcellent = 3.0;
-        } else {
-          growthGood = 0.5;      // Large accounts grow slower
-          growthExcellent = 1.5;
-        }
-        
-        if (weeklyGrowth >= growthExcellent) return 'positive';
-        if (weeklyGrowth >= growthGood) return 'mixed';
-        if (weeklyGrowth >= 0) return 'negative';
-        return 'declining';
-        
-      case 'reach':
-        const avgReach = data.avgReach || 0;
-        const reachRatio = followerCount > 0 ? avgReach / followerCount : 0;
-        
-        if (reachRatio >= 0.6) return 'positive';
-        if (reachRatio >= 0.3) return 'mixed';
-        if (reachRatio >= 0.1) return 'negative';
-        return 'very_low';
-        
-      case 'frequency':
-        const frequencyData = data.recentPosts ? calculateFrequencyOptimization(data.recentPosts) : null;
-        if (!frequencyData) return 'neutral';
-        
-        const difference = Math.abs(frequencyData.currentFrequency - frequencyData.optimalFrequency);
-        
-        if (difference <= 0.5) return 'positive';
-        if (difference <= 1.5) return 'mixed';
-        return 'negative';
-        
-      case 'timing':
-        const timingData = data.recentPosts ? calculateTimingOptimization(data.recentPosts) : null;
-        if (!timingData || timingData.timeSlots.length === 0) return 'neutral';
-        
-        // If they have clear timing patterns and good performance variance
-        const topSlotPerformance = timingData.timeSlots[0]?.engagementScore || 0;
-        const avgLikes = data.avgLikes || 0;
-        
-        if (topSlotPerformance > avgLikes * 1.5) return 'positive';
-        if (topSlotPerformance > avgLikes * 1.2) return 'mixed';
-        return 'negative';
-        
-      case 'content':
-        if (!data.recentPosts || data.recentPosts.length < 5) return 'neutral';
-        
-        // Analyze content type performance variance
-        const contentTypes = analyzeContentTypePerformance(data.recentPosts);
-        if (contentTypes.length < 2) return 'neutral';
-        
-        const bestType = contentTypes[0];
-        const worstType = contentTypes[contentTypes.length - 1];
-        const performanceGap = (bestType.avgEngagement - worstType.avgEngagement) / (worstType.avgEngagement || 1);
-        
-        if (performanceGap > 1.0) return 'positive'; // Clear winner
-        if (performanceGap > 0.3) return 'mixed';   // Some variance
-        return 'negative'; // All performing similarly (might need more variety)
-        
-      default:
-        return 'neutral';
+  // Enhanced metric options
+  const enhancedMetricOptions = [
+    { 
+      value: 'discovery', 
+      label: 'Maximize Growth', 
+      description: 'Reach more people and drive profile visits',
+      icon: <Target className="w-6 h-6" />,
+      color: 'from-blue-500 to-indigo-600'
+    },
+    { 
+      value: 'engagement_quality', 
+      label: 'Improve Engagement Quality', 
+      description: 'Get more saves and meaningful comments',
+      icon: <TrendingUp className="w-6 h-6" />,
+      color: 'from-purple-500 to-pink-600'
+    },
+    { 
+      value: 'timing', 
+      label: 'Optimize My Timing', 
+      description: 'Post when your content reaches the most people',
+      icon: <Clock className="w-6 h-6" />,
+      color: 'from-orange-500 to-red-600'
+    },
+    { 
+    value: 'frequency', 
+    label: 'Perfect My Posting Frequency', 
+    description: 'Find the ideal posting schedule for maximum engagement',
+    icon: <BarChart3 className="w-6 h-6" />,
+    color: 'from-emerald-500 to-green-600'
+  },
+    { 
+      value: 'ab_testing', 
+      label: 'Get A/B Testing Ideas', 
+      description: 'Specific tests to optimize your strategy',
+      icon: <TestTube className="w-6 h-6" />,
+      color: 'from-green-500 to-emerald-600'
+    },
+    { 
+      value: 'content_gaps', 
+      label: 'Find Content Opportunities', 
+      description: 'Identify gaps and missed opportunities',
+      icon: <Search className="w-6 h-6" />,
+      color: 'from-yellow-500 to-orange-500'
+    },
+    {
+  value: 'sentiment',
+  label: 'Understand Audience Sentiment',
+  description: 'See how people really feel about your content',
+  icon: <Users className="w-6 h-6" />,
+  color: 'from-pink-500 to-rose-600'
+},
+    { 
+      value: 'definitions', 
+      label: 'Understand My Metrics', 
+      description: 'What do all these numbers mean?',
+      icon: <BookOpen className="w-6 h-6" />,
+      color: 'from-gray-500 to-gray-600'
     }
-  };
-
-  // Response Variations System
-const getResponseVariations = (metric: ValidMetric, performance: PerformanceLevel) => {
-  const variations: Record<ValidMetric, Record<VariationLevel, { openers: string[], closers: string[] }>> = {
-    growth: {
-      positive: {
-        openers: [
-          "This is exciting! Your growth numbers are looking really solid.",
-          "Your follower growth is definitely trending in the right direction.",
-          "Nice work on the growth front - you're building real momentum here.",
-          "Your growth rate is impressive - you're clearly doing something right."
-        ],
-        closers: [
-          "Keep this momentum going and you'll hit your next milestone soon.",
-          "This growth rate puts you ahead of most creators in your range.",
-          "Focus on what's working and this upward trend should continue.",
-          "Scale what's working and you could see even faster growth."
-        ]
-      },
-      mixed: {
-        openers: [
-          "Your growth is steady with some clear opportunities to accelerate it.",
-          "You're building followers consistently - let's see how we can boost that rate.",
-          "Your growth shows good potential with room for optimization.",
-          "Solid foundation here - a few tweaks could really improve your growth rate."
-        ],
-        closers: [
-          "Small optimizations often lead to significant growth improvements.",
-          "You're on the right track - these changes should accelerate things.",
-          "Focus on these areas and you should see faster growth within weeks.",
-          "Your foundation is solid - time to optimize for faster growth."
-        ]
-      },
-      negative: {
-        openers: [
-          "Your growth has slowed down, but that's completely normal and fixable.",
-          "Growth can be challenging, but your data shows some clear opportunities.",
-          "Let's turn this growth plateau into an opportunity to optimize your strategy.",
-          "Growth has been slow, but I found specific areas where we can improve."
-        ],
-        closers: [
-          "Small changes often lead to big improvements in growth.",
-          "Most successful creators go through periods like this - it's part of the journey.",
-          "Focus on these recommendations and you should see improvement soon.",
-          "These strategic changes should help break through the growth plateau."
-        ]
-      }
-    },
-    engagement: {
-      positive: {
-        openers: [
-          "Your audience is clearly connecting with your content - these engagement numbers show real community building.",
-          "This engagement rate tells me your followers genuinely care about what you're sharing.",
-          "Your content is resonating well - this level of engagement is what sustainable growth looks like.",
-          "Strong engagement like this is exactly what the algorithm loves to see."
-        ],
-        closers: [
-          "Maintain this level of connection and your growth will follow naturally.",
-          "This engagement rate sets you up perfectly for sustained growth.",
-          "Keep creating content that sparks this level of interaction.",
-          "This community engagement is your foundation for long-term success."
-        ]
-      },
-      mixed: {
-        openers: [
-          "Your engagement is solid with clear opportunities to boost that connection with your audience.",
-          "Good engagement foundation here - let's see how we can make it even stronger.",
-          "Your audience is responding well, and there's room to increase that engagement further.",
-          "Decent engagement levels with some specific areas we can optimize."
-        ],
-        closers: [
-          "These optimizations should help you connect even deeper with your audience.",
-          "Focus on these areas and your engagement should improve noticeably.",
-          "Small tweaks to boost engagement often have big impacts on growth.",
-          "Better engagement will naturally lead to better reach and growth."
-        ]
-      },
-      negative: {
-        openers: [
-          "Your engagement has room to grow, which actually gives us clear areas to focus on.",
-          "Let's work on boosting that connection with your audience - I see specific opportunities.",
-          "Engagement can be tricky, but your posting patterns show me exactly what we need to adjust.",
-          "There's opportunity to build stronger connections with your audience."
-        ],
-        closers: [
-          "Better engagement is often just a few strategic changes away.",
-          "Focus on connection and interaction - the numbers will follow.",
-          "These changes should help you build a more engaged community.",
-          "Stronger engagement will improve everything else about your account."
-        ]
-      }
-    },
-    timing: {
-      positive: {
-        openers: [
-          "You've really dialed in your timing - your audience clearly has predictable patterns.",
-          "Your timing strategy is working well - there's a clear pattern in your best-performing posts.",
-          "Great timing insights here - you've found when your audience is most active.",
-          "Your posting schedule aligns well with when your audience wants to engage."
-        ],
-        closers: [
-          "Stick with these timing patterns - they're clearly working for you.",
-          "This timing consistency will help build audience expectations.",
-          "Your timing strategy is a real competitive advantage.",
-          "Consistent timing like this helps build loyal viewing habits."
-        ]
-      },
-      mixed: {
-        openers: [
-          "I found some good timing patterns in your data with room to optimize further.",
-          "Your timing shows promise - there are some clear windows where you perform better.",
-          "Decent timing strategy with opportunities to fine-tune for better results.",
-          "Some solid timing insights here that we can build on."
-        ],
-        closers: [
-          "Refining your timing could give you a nice boost in engagement.",
-          "Better timing consistency should improve your overall performance.",
-          "These timing optimizations are often quick wins for creators.",
-          "Focus on these time windows and you should see improvement."
-        ]
-      },
-      negative: {
-        openers: [
-          "Your posting times are scattered, but I found some clear patterns in when your audience is active.",
-          "There's a timing opportunity here - your data shows when your audience is most engaged.",
-          "Your current timing isn't optimized, but the data shows clear windows of opportunity.",
-          "Timing has been inconsistent, but I found when your audience is most responsive."
-        ],
-        closers: [
-          "Better timing alone could significantly boost your engagement.",
-          "This is often one of the easiest ways to improve performance.",
-          "Consistent timing will help you reach more of your audience.",
-          "Focus on timing first - it impacts everything else."
-        ]
-      }
-    },
-    frequency: {
-      positive: {
-        openers: [
-          "Your posting frequency is really well-calibrated for your audience.",
-          "You've found a great posting rhythm that your audience responds well to.",
-          "Your frequency strategy is working - good balance between staying visible and not overwhelming.",
-          "Perfect posting cadence - your audience knows when to expect content from you."
-        ],
-        closers: [
-          "Keep this posting rhythm - it's clearly working for your audience.",
-          "This frequency gives you great visibility without audience fatigue.",
-          "Maintain this consistency - it's building strong audience habits.",
-          "Your posting frequency is a real strength in your strategy."
-        ]
-      },
-      mixed: {
-        openers: [
-          "Your posting frequency is decent with room to optimize for better engagement.",
-          "Good posting consistency with opportunities to fine-tune the frequency.",
-          "Your frequency shows some patterns that we can optimize further.",
-          "Solid posting rhythm with potential to adjust for better performance."
-        ],
-        closers: [
-          "Small frequency adjustments often lead to better engagement rates.",
-          "Finding your optimal posting rhythm will improve overall performance.",
-          "Better frequency balance should boost your audience engagement.",
-          "Optimize this and you'll see improvements across all your metrics."
-        ]
-      },
-      negative: {
-        openers: [
-          "Your posting frequency could use some optimization - I see clear opportunities to improve.",
-          "There's room to find a better posting rhythm that works for both you and your audience.",
-          "Your frequency pattern shows we can optimize for better engagement and reach.",
-          "Let's work on finding your optimal posting frequency based on your data."
-        ],
-        closers: [
-          "The right posting frequency can dramatically improve your results.",
-          "Better frequency balance will help with both engagement and growth.",
-          "This optimization could be a game-changer for your account performance.",
-          "Finding your rhythm is key to sustainable, long-term growth."
-        ]
-      }
-    },
-    content: {
-      positive: {
-        openers: [
-          "Your content strategy is really working - you've found formats that resonate with your audience.",
-          "Great content performance! You're clearly creating what your audience wants to see.",
-          "Your content mix is hitting the mark - engagement across formats shows strong audience connection.",
-          "Excellent content performance - you've identified what works best for your community."
-        ],
-        closers: [
-          "Double down on your best-performing content types for continued success.",
-          "This content strategy is building a loyal audience - keep it up.",
-          "Your content approach is working - maintain this quality and variety.",
-          "Focus on scaling your winning content formats for even better results."
-        ]
-      },
-      mixed: {
-        openers: [
-          "Your content shows good potential with clear opportunities to optimize performance.",
-          "Solid content foundation with room to improve your top-performing formats.",
-          "Your content strategy has bright spots - let's identify and scale what's working best.",
-          "Good content variety with opportunities to focus on your strongest formats."
-        ],
-        closers: [
-          "Focus on your best-performing content types to boost overall engagement.",
-          "Optimizing your content mix should improve performance across the board.",
-          "These content insights should help you create more engaging posts.",
-          "Better content strategy will naturally improve engagement and reach."
-        ]
-      },
-      negative: {
-        openers: [
-          "Your content has room for improvement, but I found clear patterns in what's working.",
-          "Content performance varies, but the data shows specific formats that could work better.",
-          "Let's optimize your content strategy - I see opportunities to improve engagement.",
-          "Content engagement could be stronger, but there are clear areas to focus on."
-        ],
-        closers: [
-          "Better content strategy often leads to significant improvement in all metrics.",
-          "Focus on high-performing content types and engagement should improve.",
-          "These content optimizations should help you connect better with your audience.",
-          "Improved content strategy will boost engagement, reach, and growth."
-        ]
-      }
-    },
-    reach: {
-      positive: {
-        openers: [
-          "Your reach is performing really well - you're successfully expanding beyond your follower base.",
-          "Excellent reach numbers! Your content is getting discovered by new audiences.",
-          "Strong reach performance shows your content is resonating beyond your existing followers.",
-          "Great reach metrics - you're effectively growing your audience through discovery."
-        ],
-        closers: [
-          "Maintain this reach strategy to continue growing your audience.",
-          "This reach performance is exactly what drives sustainable growth.",
-          "Keep creating discoverable content and your audience will continue expanding.",
-          "Your reach strategy is working - scale what's driving this performance."
-        ]
-      },
-      mixed: {
-        openers: [
-          "Your reach is decent with clear opportunities to expand your audience further.",
-          "Good reach foundation with room to optimize for better discoverability.",
-          "Your content reaches a solid audience, but there's potential to expand that reach.",
-          "Solid reach performance with specific areas we can improve for better discovery."
-        ],
-        closers: [
-          "Better reach optimization should help you discover new audience segments.",
-          "Focus on these areas and your content should reach more people.",
-          "Improved reach will naturally lead to faster follower growth.",
-          "These reach optimizations should expand your audience significantly."
-        ]
-      },
-      negative: {
-        openers: [
-          "Your reach could be improved, but I found specific strategies to expand your audience.",
-          "Let's work on boosting your reach - there are clear opportunities for better discovery.",
-          "Reach has been limited, but your content has potential to reach much larger audiences.",
-          "Your reach needs optimization, but the data shows clear paths to improvement."
-        ],
-        closers: [
-          "Better reach strategies can dramatically expand your audience.",
-          "Focus on discoverability and you should see significant reach improvements.",
-          "These reach optimizations should help you find new audience segments.",
-          "Improved reach is often the key to breaking through growth plateaus."
-        ]
-      }
-    }
-  };
-  
-  // Map performance levels to variation levels
-  const getVariationLevel = (perf: PerformanceLevel): VariationLevel => {
-    switch (perf) {
-      case 'positive':
-        return 'positive';
-      case 'mixed':
-      case 'neutral':
-        return 'mixed';
-      case 'negative':
-      case 'declining':
-      case 'very_low':
-      default:
-        return 'negative';
-    }
-  };
-  
-  const variationLevel = getVariationLevel(performance);
-  
-  return variations[metric]?.[variationLevel] || { 
-    openers: ["Let me analyze your data..."], 
-    closers: ["These insights should help you improve."] 
-  };
-};
-
-  // Get random variation while avoiding recent repeats
-  // Get random variation while avoiding recent repeats
-const getRandomVariation = (variations: string[], key: string): string => {
-  const lastUsed = lastUsedVariationsRef.current[key];
-  const available = variations.filter(v => v !== lastUsed);
-  const selected = available.length > 0 ? available[Math.floor(Math.random() * available.length)] : variations[0];
-  
-  // Update ref (doesn't cause re-render)
-  lastUsedVariationsRef.current[key] = selected;
-  
-  return selected;
-};
-
-  // Helper function to analyze content type performance
-  const analyzeContentTypePerformance = (posts: InstagramPost[]) => {
-    const typeGroups = new Map();
-    
-    posts.forEach(post => {
-      let type = 'Post';
-      if (post.media_type === 'VIDEO') type = 'Reel';
-      else if (post.media_type === 'CAROUSEL_ALBUM') type = 'Carousel';
-      
-      if (!typeGroups.has(type)) {
-        typeGroups.set(type, { posts: [], totalEngagement: 0, totalReach: 0 });
-      }
-      
-      const group = typeGroups.get(type);
-      group.posts.push(post);
-      group.totalEngagement += (post.like_count || 0) + (post.comments_count || 0);
-      group.totalReach += post.reach || 0;
-    });
-
-    return Array.from(typeGroups.entries()).map(([type, data]) => ({
-      type,
-      count: data.posts.length,
-      avgEngagement: Math.round(data.totalEngagement / data.posts.length),
-      avgReach: Math.round(data.totalReach / data.posts.length),
-      engagementRate: data.totalReach > 0 ? 
-        (((data.totalEngagement / data.totalReach) * 100).toFixed(1) + '%') : 
-        'N/A'
-    })).sort((a, b) => b.avgEngagement - a.avgEngagement);
-  };
-
-  // Metric definitions data
-  const metricDefinitions = {
-    growth: {
-      title: "Growth Metrics",
-      emoji: "🚀",
-      metrics: [
-        {
-          name: "Total Followers",
-          definition: "The number of people who follow your account",
-          why: "Shows the size of your community",
-          example: "If you have 2,500 followers, that's your potential audience for each post",
-          good: "Growth depends on your niche, but 5-10% monthly growth is solid"
-        },
-        {
-          name: "Weekly Growth Rate", 
-          definition: "Percentage increase in followers over the past 7 days",
-          why: "Tracks how fast your community is growing",
-          example: "+2.5% means you gained 25 followers for every 1000 you had",
-          good: "1-3% weekly is healthy, 5%+ is excellent"
-        },
-        {
-          name: "Monthly Growth Rate",
-          definition: "Percentage increase in followers over the past 30 days", 
-          why: "Shows longer-term growth trends",
-          example: "+8% monthly means you're doubling your followers every year",
-          good: "5-15% monthly growth is great for most creators"
-        }
-      ]
-    },
-    engagement: {
-      title: "Engagement Metrics", 
-      emoji: "💬",
-      metrics: [
-        {
-          name: "Engagement Rate",
-          definition: "Percentage of people who like, comment, or save your posts",
-          why: "Shows how much your audience loves your content",
-          example: "4% rate means 40 people engage for every 1000 who see your post",
-          good: "3.5%+ is above average, 6%+ is excellent"
-        },
-        {
-          name: "Average Likes",
-          definition: "Typical number of likes your posts receive",
-          why: "Quick indicator of content popularity",
-          example: "If you average 150 likes, posts with 200+ are performing well",
-          good: "Consistency matters more than total number"
-        },
-        {
-          name: "Average Comments", 
-          definition: "Typical number of comments your posts receive",
-          why: "Shows deeper audience connection and conversation",
-          example: "20 comments suggests people want to engage with your ideas",
-          good: "Comments are 10x more valuable than likes for growth"
-        },
-        {
-          name: "Average Reach",
-          definition: "How many unique people see your posts on average",
-          why: "Reach determines your growth potential",
-          example: "1,500 reach with 1,000 followers means good discoverability",
-          good: "Reach above 50% of followers indicates healthy algorithm performance"
-        }
-      ]
-    },
-    timing: {
-      title: "Timing Metrics",
-      emoji: "⏰", 
-      metrics: [
-        {
-          name: "Best Time to Post",
-          definition: "When your audience is most active and likely to engage",
-          why: "Posting at the right time gets more immediate engagement",
-          example: "If your best time is 7PM, posts then get 2x more likes",
-          good: "Consistency in timing helps audience expect your content"
-        },
-        {
-          name: "Engagement Score",
-          definition: "How well posts perform at different times (calculated from likes + comments)",
-          why: "Compares performance across different posting times",
-          example: "Score of 85 at 7PM vs 45 at 10AM shows clear preference",
-          good: "Focus on your top 2-3 time slots for best results"
-        }
-      ]
-    },
-    frequency: {
-      title: "Frequency Metrics",
-      emoji: "📈",
-      metrics: [
-        {
-          name: "Current Frequency", 
-          definition: "How often you currently post per week",
-          why: "Shows your current posting rhythm",
-          example: "2.5 posts/week means you post about every 3 days",
-          good: "Consistency matters more than high frequency"
-        },
-        {
-          name: "Optimal Frequency",
-          definition: "How often you should post based on your engagement data",
-          why: "The sweet spot between staying visible and not overwhelming your audience",
-          example: "If optimal is 3/week but you post 5/week, you might be over-posting",
-          good: "Quality over quantity - better to post less but consistently"
-        },
-        {
-          name: "Consistency Score",
-          definition: "How regular your posting schedule is (0-100%)",
-          why: "Algorithm favors accounts that post consistently",
-          example: "80% means you post fairly regularly, 95% means very consistent",
-          good: "70%+ consistency helps with algorithm visibility"
-        }
-      ]
-    },
-    content: {
-      title: "Content Metrics",
-      emoji: "📊", 
-      metrics: [
-        {
-          name: "Content Types",
-          definition: "Performance comparison between posts, carousels, and reels",
-          why: "Shows which formats your audience prefers",
-          example: "If carousels average 200 likes vs 100 for posts, focus on carousels",
-          good: "Double down on your best-performing format"
-        },
-        {
-          name: "Average Saves",
-          definition: "How many people save your posts on average",
-          why: "Saves indicate your content is valuable enough to reference later",
-          example: "High saves often lead to better reach over time",
-          good: "Even 5-10 saves per post shows strong content value"
-        }
-      ]
-    },
-    reach: {
-      title: "Reach & Discovery Metrics",
-      emoji: "👥",
-      metrics: [
-        {
-          name: "Profile Visits",
-          definition: "How many people visit your profile from your posts",
-          why: "Shows how compelling your content is for discovery",
-          example: "500 profile visits from 2,000 reach = 25% visit rate",
-          good: "10%+ profile visit rate from reach is strong"
-        },
-        {
-          name: "Impressions", 
-          definition: "Total number of times your posts are seen (includes repeat views)",
-          why: "Shows total content visibility",
-          example: "3,000 impressions with 1,500 reach means people see your posts twice on average",
-          good: "Higher impressions than reach indicates engaging content"
-        }
-      ]
-    }
-  };
-
-  const metricOptions: MetricOption[] = [
-    { value: 'growth', label: 'Grow My Following', description: 'Strategies to reach more people' },
-    { value: 'engagement', label: 'Boost Engagement', description: 'Get your audience more involved' },
-    { value: 'timing', label: 'Optimize My Timing', description: 'Post when your audience is active' },
-    { value: 'frequency', label: 'Find My Rhythm', description: 'How often you should post' },
-    { value: 'content', label: 'Improve My Content', description: 'Focus on what performs best' },
-    { value: 'reach', label: 'Expand My Reach', description: 'Get discovered by new people' },
-    { value: 'definitions', label: 'Understand My Metrics', description: 'What do all these numbers mean?' }
-  ];
-
-  const connectedAccounts: Account[] = [
-    { platform: 'Instagram', username: instagramData?.username || 'Not connected', connected: !!instagramData, color: 'from-pink-500 to-orange-500' },
-    { platform: 'Twitter/X', username: 'Not available', connected: false, color: 'from-gray-800 to-black' },
-    { platform: 'LinkedIn', username: 'Not available', connected: false, color: 'from-blue-600 to-blue-700' }
   ];
 
   const handleMetricSelect = (metric: string) => {
     setSelectedMetric(metric);
-    
-    if (metric === 'definitions') {
-      setChatStep(5);
-    } else {
-      setChatStep(2);
-    }
+    setChatStep(metric === 'definitions' ? 5 : 2);
     
     trackFeature('ai_metric_selection', 'click', {
       metric_selected: metric,
       has_instagram_data: !!instagramData
-    })
-  };
-
-  const handleAccountSelect = (account: Account) => {
-    setSelectedAccount(account);
-    setIsAnalyzing(true);
-    setChatStep(3);
-    
-    trackEngagement('ai_analysis_started', {
-      metric_type: selectedMetric,
-      account_platform: account.platform,
-      has_real_data: account.connected,
-      analysis_start_time: new Date().toISOString()
-    })
-    
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      setChatStep(4);
-      
-      trackEngagement('ai_analysis_completed', {
-        metric_type: selectedMetric,
-        account_platform: account.platform,
-        analysis_duration: 2000,
-        recommendations_generated: true
-      })
-    }, 2000);
+    });
   };
 
   const resetChat = () => {
     setChatStep(1);
     setSelectedMetric('');
-    setSelectedAccount('');
-    setSelectedDefinitionCategory(null);
-    setIsAnalyzing(false);
-    
-    trackFeature('ai_chat_reset', 'click', {
-      previous_metric: selectedMetric,
-      chat_step_reached: chatStep
-    })
+    setUserPreference('');
+    setShowDetailedAnalysis(false);
   };
 
-  const getAIRecommendations = (): AIRecommendation => {
-    if (!instagramData || !instagramData.recentPosts || instagramData.recentPosts.length === 0) {
+  // Enhanced recommendations based on real data
+  const getEnhancedRecommendations = () => {
+    if (!instagramData?.recentPosts?.length) {
       return {
         title: "Connect Your Account for Personalized Insights",
-        insights: [
-          "Connect your Instagram account to get data-driven recommendations based on your actual performance.",
-          "I need at least 5-10 posts to provide meaningful analysis of your content patterns.",
-          "Once connected, I'll analyze your posting times, content types, and audience engagement to give you specific advice."
-        ],
-        actions: [
-          "Connect your Instagram Business or Creator account from the Profile tab",
-          "Post consistently for 1-2 weeks to gather enough data for analysis",
-          "Return here for personalized recommendations based on your performance"
-        ]
+        heroInsight: "I need access to your Instagram data to provide meaningful recommendations.",
+        sections: []
       };
     }
 
-    // Get performance classification and variations
-    const performance = classifyPerformance(selectedMetric as ValidMetric, instagramData);
-    const variations = getResponseVariations(selectedMetric as ValidMetric, performance);
-    
-    // Get dynamic opener and closer
-    const opener = getRandomVariation(variations.openers, `${selectedMetric}_opener`);
-    const closer = getRandomVariation(variations.closers, `${selectedMetric}_closer`);
-
-    // Calculate data for recommendations
-    const timingData = calculateTimingOptimization(instagramData.recentPosts);
+    // Calculate enhanced metrics
+    const discoveryAnalysis = analyzeDiscoveryPotential(instagramData.recentPosts);
+    const reachAnalysis = analyzeReachOptimization(instagramData.recentPosts, instagramData.followers);
+    const engagementQuality = analyzeEngagementQuality(instagramData.recentPosts);
+    const abTestSuggestions = generateABTestSuggestions(instagramData.recentPosts);
+    const contentGaps = analyzeContentGaps(instagramData.recentPosts);
     const frequencyData = calculateFrequencyOptimization(instagramData.recentPosts);
-    const contentTypes = analyzeContentTypePerformance(instagramData.recentPosts);
-    const bestContentType = contentTypes[0];
-    const userEngagementRate = parseFloat(instagramData.engagementRate?.replace('%', '') || '0');
+    const sentimentAnalysis = analyzeSentiment(instagramData.recentPosts);
 
-    // Track performance classification
-    trackEngagement('ai_performance_classified', {
-      metric: selectedMetric,
-      performance_level: performance,
-      follower_count: instagramData.followers,
-      engagement_rate: userEngagementRate
-    });
-
-    const recommendations: Record<string, AIRecommendation> = {
-      growth: {
-        title: "Your Growth Strategy Analysis",
-        insights: [
-          opener,
-          `You've built a community of ${instagramData.followers.toLocaleString()} followers${instagramData.growthData?.canCalculateWeekly ? ` with ${instagramData.growthRate} growth this week` : ''}.`,
-          `Your ${instagramData.engagementRate} engagement rate ${userEngagementRate > 3.5 ? 'is performing well above average' : 'has room to grow'}.`,
-          `Profile visits: ${instagramData.accountInsights?.profile_visits?.toLocaleString() || 'N/A'} in the last 30 days.`
+    const recommendations = {
+      discovery: {
+        title: "Growth & Reach Optimization",
+        heroInsight: discoveryAnalysis ? 
+          `Your ${discoveryAnalysis[0].label} reach ${((discoveryAnalysis[0].avgReach / (discoveryAnalysis[1]?.avgReach || discoveryAnalysis[0].avgReach)) * 100 - 100).toFixed(0)}% more people than your other content. Creating 2 more per week could help you reach an additional ${(discoveryAnalysis[0].avgReach * 2 * 4).toLocaleString()} people monthly.` :
+          "I need more posts with reach data to analyze your discovery potential.",
+        sections: [
+          {
+            title: "Your Discovery Power",
+            type: "metric",
+            value: reachAnalysis ? `${reachAnalysis.reachToFollowerRatio}%` : "Calculating...",
+            description: "Your content reaches this percentage of your followers on average",
+            status: reachAnalysis ? (parseFloat(reachAnalysis.reachToFollowerRatio) > 70 ? "excellent" : parseFloat(reachAnalysis.reachToFollowerRatio) > 50 ? "good" : "needs-improvement") : "unknown"
+          }
         ],
         actions: [
-          bestContentType ? `Focus on ${bestContentType.type.toLowerCase()}s - they average ${bestContentType.avgEngagement} engagement vs your overall ${instagramData.avgLikes} average` : "Test different content formats to find what resonates most",
-          timingData.timeSlots.length > 0 ? `Post during your peak time: ${timingData.timeSlots[0].time} (averages ${timingData.timeSlots[0].avgLikes} likes)` : "Experiment with different posting times",
-          performance === 'positive' ? "Scale what's working with more of your best content" : "Focus on increasing engagement rate with more interactive content"
+          {
+            priority: 1,
+            timeframe: "This Week",
+            action: discoveryAnalysis ? 
+              `Create 2 ${discoveryAnalysis[0].label} - they average ${discoveryAnalysis[0].avgReach.toLocaleString()} reach` :
+              "Create more video content for better reach",
+            impact: "High Impact",
+            expected: discoveryAnalysis ? `+${(discoveryAnalysis[0].avgReach * 2).toLocaleString()} more people reached` : "Improved discovery"
+          }
         ]
       },
-      engagement: {
-        title: "Engagement Optimization Analysis", 
-        insights: [
-          opener,
-          `Your posts average ${instagramData.avgLikes} likes and ${(instagramData.avgComments ?? 0)} comments.`,
-          bestContentType ? `${bestContentType.type}s are your strongest format with ${bestContentType.engagementRate} engagement rate.` : "Need more content variety to identify top performers.",
-          `Your audience is most active during ${timingData.timeSlots[0]?.time || 'evening hours'}.`
+      engagement_quality: {
+        title: "Engagement Quality Analysis",
+        heroInsight: engagementQuality ? 
+          `Your engagement quality is ${engagementQuality.qualityRating.toLowerCase()} with a ${engagementQuality.avgSaveToLikeRatio}% save rate. ${engagementQuality.highValuePostsPercentage}% of your posts drive high-value engagement.` :
+          "I need more engagement data to analyze your content quality.",
+        sections: [
+          {
+            title: "Content Value Score",
+            type: "metric", 
+            value: engagementQuality ? `${engagementQuality.avgSaveToLikeRatio}%` : "Calculating...",
+            description: "Percentage of people who save your posts (higher = more valuable)",
+            status: engagementQuality ? (parseFloat(engagementQuality.avgSaveToLikeRatio) > 4 ? "excellent" : parseFloat(engagementQuality.avgSaveToLikeRatio) > 2 ? "good" : "needs-improvement") : "unknown"
+          }
         ],
         actions: [
-          bestContentType ? `Create more ${bestContentType.type.toLowerCase()}s - they get ${bestContentType.avgEngagement} avg engagement` : "Test different content formats",
-          `Post during your top time slots: ${timingData.timeSlots.slice(0, 2).map(slot => slot.time).join(' and ')}`,
-          (instagramData.avgComments ?? 0) < (instagramData.avgLikes ?? 0) * 0.1 ? "Increase comments with questions in captions" : "Maintain strong comment engagement"
-        ]
-      },
-      timing: {
-        title: "Optimal Timing Strategy",
-        insights: [
-          opener,
-          `Based on ${instagramData.recentPosts.length} posts, your best performing time is ${timingData.timeSlots[0]?.time} with ${timingData.timeSlots[0]?.avgLikes} average likes.`,
-          `You've tested ${timingData.timeSlots.length} different time slots with clear performance differences.`,
-          `Your top performing times consistently outperform your average by ${timingData.timeSlots[0] ? Math.round(((timingData.timeSlots[0].avgLikes - (instagramData.avgLikes || 0)) / (instagramData.avgLikes || 1)) * 100) : 25}%.`
-        ],
-        actions: [
-          `Schedule posts for ${timingData.timeSlots[0]?.time} - your highest engagement window`,
-          timingData.timeSlots.length > 1 ? `Alternate between your top ${Math.min(3, timingData.timeSlots.length)} time slots` : "Test 2-3 additional time slots",
-          "Track performance at these times for consistency validation"
+          {
+            priority: 1,
+            timeframe: "This Week",
+            action: engagementQuality && parseFloat(engagementQuality.avgSaveToLikeRatio) < 3 ? 
+              "Create educational content that people want to reference later" :
+              "Maintain your valuable content strategy",
+            impact: "High Impact",
+            expected: "Increase save rate to 5%+"
+          }
         ]
       },
       frequency: {
-        title: "Posting Frequency Analysis",
-        insights: [
-          opener,
-          `Current frequency: ${frequencyData.currentFrequency} posts/week. Based on your engagement data, ${frequencyData.optimalFrequency} posts/week appears optimal.`,
-          `Your best performing frequency range is ${frequencyData.performanceByFrequency[0]?.range} with ${frequencyData.performanceByFrequency[0]?.avgEngagement} average engagement per post.`,
-          `Consistency score: ${frequencyData.consistencyScore}% - ${frequencyData.consistencyScore > 70 ? 'good posting rhythm' : 'room to improve posting consistency'}.`
-        ],
-        actions: [
-          frequencyData.currentFrequency !== frequencyData.optimalFrequency ? 
-            `Gradually adjust to ${frequencyData.optimalFrequency} posts per week` : 
-            "Maintain your current posting frequency",
-          `Focus on the ${frequencyData.performanceByFrequency[0]?.range} range - your sweet spot`,
-          "Plan content in advance to maintain quality and consistency"
-        ]
+    title: "Posting Frequency Optimization",
+    heroInsight: frequencyData ? 
+      `You're currently posting ${frequencyData.currentFrequency} times per week. Based on your engagement patterns, ${frequencyData.optimalFrequency} posts per week would be optimal. Your consistency score is ${frequencyData.consistencyScore}%.` :
+      "I need more posting history to analyze your optimal frequency patterns.",
+    sections: [
+      {
+        title: "Consistency Score",
+        type: "metric",
+        value: frequencyData ? `${frequencyData.consistencyScore}%` : "Calculating...",
+        description: "How regularly you post (higher = more predictable schedule)",
+        status: frequencyData ? (frequencyData.consistencyScore > 70 ? "excellent" : frequencyData.consistencyScore > 50 ? "good" : "needs-improvement") : "unknown"
+      }
+    ],
+    actions: [
+      {
+        priority: 1,
+        timeframe: "This Week",
+        action: frequencyData ? 
+          (frequencyData.currentFrequency < frequencyData.optimalFrequency ? 
+            `Increase to ${frequencyData.optimalFrequency} posts/week for better engagement` :
+            frequencyData.currentFrequency > frequencyData.optimalFrequency ?
+            `Scale back to ${frequencyData.optimalFrequency} posts/week to avoid audience fatigue` :
+            "Maintain your current posting frequency - it's optimal!") :
+          "Post consistently for 2-3 weeks to unlock frequency insights",
+        impact: "High Impact",
+        expected: frequencyData ? 
+          `${Math.abs(frequencyData.optimalFrequency - frequencyData.currentFrequency) * 15}% improvement in average engagement` :
+          "Better audience retention"
+      }
+    ]
+  },
+  sentiment: {
+  title: "Audience Sentiment Analysis",
+  heroInsight: sentimentAnalysis ? 
+    `${sentimentAnalysis.overallSentiment.positive}% of comments are positive, ${sentimentAnalysis.overallSentiment.negative}% negative. Your ${sentimentAnalysis.insights.bestContentType || 'content'} generates the most positive reactions, and sentiment is ${sentimentAnalysis.insights.sentimentTrend} over time.` :
+    "I need more comments on your posts to analyze audience sentiment patterns.",
+  sections: [
+    {
+      title: "Overall Sentiment Score",
+      type: "metric",
+      value: sentimentAnalysis ? `${sentimentAnalysis.insights.averageSentimentScore > 0 ? '+' : ''}${sentimentAnalysis.insights.averageSentimentScore}` : "Calculating...",
+      description: "How positive your audience feels about your content overall",
+      status: sentimentAnalysis ? 
+        (sentimentAnalysis.insights.averageSentimentScore > 20 ? "excellent" : 
+         sentimentAnalysis.insights.averageSentimentScore > 0 ? "good" : "needs-improvement") : "unknown"
+    }
+  ],
+  actions: [
+    {
+      priority: 1,
+      timeframe: "This Week",
+      action: sentimentAnalysis ? 
+        (sentimentAnalysis.insights.averageSentimentScore > 20 ? 
+          `Keep creating ${sentimentAnalysis.insights.bestContentType} - they generate the most positive sentiment` :
+          `Focus on positive content like your ${sentimentAnalysis.insights.bestContentType} to improve sentiment`) :
+        "Create engaging content that encourages positive comments",
+      impact: "High Impact",
+      expected: sentimentAnalysis ? "10-15% improvement in positive sentiment" : "Better audience connection"
+    }
+  ]
+},
+      ab_testing: {
+        title: "Your A/B Testing Lab",
+        heroInsight: abTestSuggestions.length > 0 ? 
+          `I found ${abTestSuggestions.length} ready-to-run tests based on your posting patterns. Start with timing tests for quick wins.` :
+          "I need more posting history to generate specific A/B test recommendations.",
+        sections: [],
+        tests: abTestSuggestions.slice(0, 3)
       },
-      content: {
-        title: "Content Performance Analysis",
-        insights: [
-          opener,
-          bestContentType ? 
-            `${bestContentType.type}s are your top format: ${bestContentType.avgEngagement} avg engagement, ${bestContentType.engagementRate} engagement rate.` :
-            "Need more content variety for comprehensive analysis.",
-          contentTypes.length > 1 ? 
-            `Performance gap: Your best format outperforms others by ${Math.round(((bestContentType.avgEngagement - contentTypes[contentTypes.length - 1].avgEngagement) / contentTypes[contentTypes.length - 1].avgEngagement) * 100)}%.` :
-            "Try different content types to find what works best.",
-          `Your content reaches an average of ${instagramData.avgReach?.toLocaleString() || 'N/A'} people per post.`
-        ],
-        actions: [
-          bestContentType ? 
-            `Create more ${bestContentType.type.toLowerCase()}s - they generate ${bestContentType.avgEngagement} avg engagement` :
-            "Test carousels, reels, and single posts to find your best format",
-          contentTypes.length > 1 ? 
-            `Improve your lowest performing format or focus entirely on what works best` :
-            "Experiment with different content types for better insights",
-          "Ask questions in captions to boost comment engagement"
-        ]
-      },
-      reach: {
-        title: "Audience Reach Analysis",
-        insights: [
-          opener,
-          `Your posts reach an average of ${instagramData.avgReach?.toLocaleString() || 'calculating'} people (${instagramData.avgReach ? ((instagramData.avgReach / instagramData.followers) * 100).toFixed(1) : 'N/A'}% of your followers).`,
-          `Total reach in the last 30 days: ${instagramData.accountInsights?.reach ? (instagramData.accountInsights.reach / 1000).toFixed(1) + 'K' : 'N/A'}.`,
-          bestContentType ? 
-            `${bestContentType.type}s achieve the best reach with ${bestContentType.avgReach.toLocaleString()} average reach per post.` :
-            "Need content variety analysis to identify best reach formats."
-        ],
-        actions: [
-          bestContentType ? 
-            `Focus on ${bestContentType.type.toLowerCase()}s for maximum reach` :
-            "Test different content formats to maximize reach",
-          `Post during peak times (${timingData.timeSlots.slice(0, 2).map(slot => slot.time).join(' and ')}) to boost reach`,
-          "Use relevant hashtags and engaging captions to expand beyond your follower base"
-        ]
+      content_gaps: {
+        title: "Content Strategy Gaps",
+        heroInsight: contentGaps.length > 0 ? 
+          `I identified ${contentGaps.length} content gaps that could be limiting your reach and engagement.` :
+          "Your content strategy is well-balanced with no major gaps detected.",
+        gaps: contentGaps.slice(0, 3)
       }
     };
 
-    const recommendation = recommendations[selectedMetric] || recommendations.growth;
-return {
-  title: recommendation.title,
-  insights: recommendation.insights,
-  actions: recommendation.actions,
-  closer
-};
+    type RecommendationKey = 'discovery' | 'engagement_quality' | 'ab_testing' | 'content_gaps';
+    const key = selectedMetric as RecommendationKey;
+    return recommendations[key] || recommendations.discovery;
   };
-
-  // Definitions view
-  if (chatStep === 5) {
-    if (selectedDefinitionCategory) {
-      const category = metricDefinitions[selectedDefinitionCategory as keyof typeof metricDefinitions];
-      
-      return (
-        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-blue-50 to-indigo-50">
-          <div className="bg-white/95 backdrop-blur-sm border-b border-blue-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <ClickTracker featureName="definition_detail_back">
-              <button 
-                onClick={() => setSelectedDefinitionCategory(null)}
-                className="mr-3 text-blue-600 font-medium"
-              >
-                ← Back
-              </button>
-            </ClickTracker>
-            <div className="flex items-center">
-              <span className="mr-2">{category.emoji}</span>
-              <h1 className="text-xl font-bold text-gray-900">{category.title}</h1>
-            </div>
-          </div>
-
-          <div className="p-4">
-            <div className="space-y-4">
-              {category.metrics.map((metric, index) => (
-                <ViewTracker
-                  key={index}
-                  featureName={`metric_definition_${metric.name.toLowerCase().replace(/\s+/g, '_')}`}
-                  metadata={{ category: selectedDefinitionCategory, metric: metric.name }}
-                >
-                  <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-200">
-                    <h3 className="font-bold text-gray-900 text-lg mb-3">{metric.name}</h3>
-                    
-                    <div className="space-y-3">
-                      <div>
-                        <h4 className="font-semibold text-gray-800 text-sm mb-1">What it means:</h4>
-                        <p className="text-gray-700 text-sm">{metric.definition}</p>
-                      </div>
-                      
-                      <div>
-                        <h4 className="font-semibold text-gray-800 text-sm mb-1">Why it matters:</h4>
-                        <p className="text-gray-700 text-sm">{metric.why}</p>
-                      </div>
-                      
-                      <div>
-                        <h4 className="font-semibold text-gray-800 text-sm mb-1">Example:</h4>
-                        <p className="text-gray-700 text-sm italic">{metric.example}</p>
-                      </div>
-                      
-                      <div className="bg-green-50 rounded-lg p-3 border border-green-200">
-                        <h4 className="font-semibold text-green-800 text-sm mb-1">💡 Good to know:</h4>
-                        <p className="text-green-700 text-sm">{metric.good}</p>
-                      </div>
-                    </div>
-                  </div>
-                </ViewTracker>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // Definitions category selection
-    return (
-      <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-blue-50 to-indigo-50">
-        <div className="bg-white/95 backdrop-blur-sm border-b border-blue-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-          <ClickTracker featureName="definitions_back">
-            <button 
-              onClick={() => resetChat()}
-              className="mr-3 text-blue-600 font-medium"
-            >
-              ← Back
-            </button>
-          </ClickTracker>
-          <div className="flex items-center">
-            <span className="mr-2">📚</span>
-            <h1 className="text-xl font-bold text-gray-900">Metric Definitions</h1>
-          </div>
-        </div>
-
-        <div className="p-4">
-          <div className="bg-gradient-to-br from-blue-100 to-indigo-100 border-blue-200 rounded-2xl p-4 mb-6 shadow-sm border">
-            <h2 className="text-lg font-bold text-gray-900 mb-2">Understanding Your Numbers</h2>
-            <p className="text-blue-800 text-sm">
-              Tap any category below to learn what each metric means and why it matters for your growth.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            {Object.entries(metricDefinitions).map(([key, category]) => (
-              <ClickTracker
-                key={key}
-                featureName={`definition_category_${key}`}
-                metadata={{ category: category.title }}
-              >
-                <button
-                  onClick={() => setSelectedDefinitionCategory(key)}
-                  className="w-full text-left p-4 bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-all"
-                >
-                  <div className="flex items-center space-x-3">
-                    <span className="text-2xl">{category.emoji}</span>
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{category.title}</h3>
-                      <p className="text-sm text-gray-600">{category.metrics.length} metrics explained</p>
-                    </div>
-                    <div className="ml-auto text-blue-400">→</div>
-                  </div>
-                </button>
-              </ClickTracker>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-indigo-50 to-purple-50">
@@ -4312,17 +4185,12 @@ return {
             <h1 className="text-xl font-bold text-gray-900">AI Coach</h1>
           </div>
           {chatStep > 1 && (
-            <ClickTracker
-              featureName="ai_chat_new_button"
-              metadata={{ current_step: chatStep, metric: selectedMetric }}
+            <button 
+              onClick={resetChat} 
+              className="text-sm text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
             >
-              <button 
-                onClick={resetChat} 
-                className="text-sm text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
-              >
-                New Chat
-              </button>
-            </ClickTracker>
+              New Analysis
+            </button>
           )}
         </div>
       </div>
@@ -4341,344 +4209,1763 @@ return {
               </div>
               <p className="text-gray-700 text-sm leading-relaxed">
                 I'm here to help you grow your Instagram with insights based on your actual data. 
-                I've analyzed your content and I'm ready to share what's working and where you have the biggest opportunities. 
-                Let's dive in! 📊
+                I've analyzed your content and I'm ready to share what's working and where you have the biggest opportunities.
               </p>
             </div>
           </div>
         </div>
 
-        {/* Chat Steps */}
-        <div className="space-y-4">
-          
-          {/* Step 1: Metric Selection */}
+        {/* Step 1: Enhanced Metric Selection */}
+        {chatStep === 1 && (
           <div className="flex items-start space-x-3">
             <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
               <span className="text-white text-sm font-bold">AI</span>
             </div>
             <div className="bg-white rounded-2xl rounded-tl-sm p-4 shadow-sm border border-indigo-100 flex-1">
-              <div className="flex items-center space-x-2 mb-3">
+              <div className="flex items-center space-x-2 mb-4">
                 <span className="text-lg">🎯</span>
                 <span className="font-semibold text-gray-900">What would you like to focus on first?</span>
               </div>
               
-              {chatStep === 1 && (
-                <div className="grid grid-cols-2 gap-2">
-                  {metricOptions.map((option) => (
-                    <ClickTracker
-                      key={option.value}
-                      featureName={`ai_metric_option_${option.value}`}
-                      metadata={{
-                        metric_label: option.label,
-                        has_instagram_data: !!instagramData
-                      }}
-                    >
-                      <button
-                        onClick={() => handleMetricSelect(option.value)}
-                        className="text-left p-3 rounded-xl border-2 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition-all group"
-                      >
-                        <div className="font-medium text-gray-900 text-sm group-hover:text-indigo-700">
+              <div className="grid grid-cols-1 gap-3">
+                {enhancedMetricOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => handleMetricSelect(option.value)}
+                    className="text-left p-4 rounded-xl border-2 border-gray-200 hover:border-indigo-300 hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 transition-all group"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-10 h-10 bg-gradient-to-r ${option.color} rounded-lg flex items-center justify-center text-white group-hover:scale-110 transition-transform`}>
+                        {option.icon}
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-900 group-hover:text-indigo-700">
                           {option.label}
                         </div>
-                        <div className="text-xs text-gray-500 mt-1 group-hover:text-indigo-600">
+                        <div className="text-xs text-gray-500 group-hover:text-indigo-600 mt-1">
                           {option.description}
                         </div>
-                      </button>
-                    </ClickTracker>
-                  ))}
-                </div>
-              )}
-              
-              {chatStep > 1 && (
-                <div className="flex items-center space-x-2 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
-                  <span className="text-indigo-600 text-sm">✓</span>
-                  <span className="text-sm text-indigo-700 font-medium">
-                    {metricOptions.find(opt => opt.value === selectedMetric)?.label}
-                  </span>
-                </div>
-              )}
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-indigo-500" />
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+        )}
 
-          {/* User Response */}
-          {chatStep > 1 && (
-            <div className="flex justify-end mb-4">
-              <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-2xl rounded-tr-sm p-3 shadow-sm max-w-xs">
-                <p className="text-sm font-medium">
-                  {metricOptions.find(opt => opt.value === selectedMetric)?.label}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Step 2: Account Selection */}
-          {chatStep >= 2 && selectedMetric !== 'definitions' && (
-            <div className="flex items-start space-x-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
-                <span className="text-white text-sm font-bold">AI</span>
-              </div>
-              <div className="bg-white rounded-2xl rounded-tl-sm p-4 shadow-sm border border-indigo-100 flex-1">
-                <div className="flex items-center space-x-2 mb-3">
-                  <span className="text-lg">📱</span>
-                  <span className="font-semibold text-gray-900">Which account should I analyze?</span>
-                </div>
-                
-                {chatStep === 2 && (
-                  <div className="space-y-2">
-                    {connectedAccounts.map((account, index) => (
-                      <ClickTracker
-                        key={index}
-                        featureName={`ai_account_${account.platform.toLowerCase()}`}
-                        metadata={{
-                          platform: account.platform,
-                          connected: account.connected,
-                          metric_context: selectedMetric
-                        }}
-                      >
-                        <button
-                          onClick={() => account.connected ? handleAccountSelect(account) : null}
-                          disabled={!account.connected}
-                          className={`w-full text-left p-3 rounded-xl border-2 transition-all ${
-                            account.connected 
-                              ? 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 group' 
-                              : 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
-                          }`}
-                        >
-                          <div className="flex items-center space-x-3">
-                            <div className={`w-10 h-10 bg-gradient-to-br ${account.color} rounded-full flex items-center justify-center shadow-sm`}>
-                              <span className="text-white text-xs font-bold">
-                                {account.platform === 'Instagram' ? 'IG' : 
-                                 account.platform === 'Twitter/X' ? 'X' : 'IN'}
-                              </span>
-                            </div>
-                            <div className="flex-1">
-                              <div className={`font-medium text-sm ${account.connected ? 'text-gray-900 group-hover:text-indigo-700' : 'text-gray-500'}`}>
-                                {account.platform}
-                              </div>
-                              <div className={`text-xs ${account.connected ? 'text-gray-600 group-hover:text-indigo-600' : 'text-gray-400'}`}>
-                                {account.username}
-                              </div>
-                            </div>
-                            {account.connected && (
-                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                            )}
-                            {!account.connected && (
-                              <div className="text-xs text-gray-400">Not connected</div>
-                            )}
-                          </div>
-                        </button>
-                      </ClickTracker>
-                    ))}
-                  </div>
-                )}
-                
-                {chatStep > 2 && (
-                  <div className="flex items-center space-x-2 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
-                    <span className="text-indigo-600 text-sm">✓</span>
-                    <span className="text-sm text-indigo-700 font-medium">
-                      {typeof selectedAccount === 'object' && selectedAccount.platform} ({typeof selectedAccount === 'object' && selectedAccount.username})
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* User Response 2 */}
-          {chatStep > 2 && selectedMetric !== 'definitions' && (
-            <div className="flex justify-end mb-4">
-              <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-2xl rounded-tr-sm p-3 shadow-sm max-w-xs">
-                <p className="text-sm font-medium">
-                  {typeof selectedAccount === 'object' && selectedAccount.platform}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Step 3: Analysis */}
-          {chatStep === 3 && isAnalyzing && (
-            <div className="flex items-start space-x-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
-                <span className="text-white text-sm font-bold">AI</span>
-              </div>
-              <div className="bg-white rounded-2xl rounded-tl-sm p-4 shadow-sm border border-indigo-100">
-                <div className="flex items-center space-x-3">
-                  <div className="animate-spin w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full"></div>
-                  <div>
-                    <p className="text-gray-800 text-sm font-medium">Analyzing your content patterns...</p>
-                    <p className="text-gray-600 text-xs mt-1">Looking for insights in your data</p>
-                  </div>
+        {/* Step 2: Analysis Results */}
+        {chatStep >= 2 && selectedMetric !== 'definitions' && (() => {
+          const recommendations = getEnhancedRecommendations();
+          
+          return (
+            <div className="space-y-6">
+              {/* User Selection Confirmation */}
+              <div className="flex justify-end">
+                <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-2xl rounded-tr-sm p-3 shadow-sm max-w-xs">
+                  <p className="text-sm font-medium">
+                    {enhancedMetricOptions.find(opt => opt.value === selectedMetric)?.label}
+                  </p>
                 </div>
               </div>
-            </div>
-          )}
 
-          {/* Step 4: Results */}
-          {chatStep === 4 && (
-            <ViewTracker
-              featureName="ai_recommendations_display"
-              metadata={{
-                metric_analyzed: selectedMetric,
-                has_real_data: !!instagramData,
-                posts_count: instagramData?.recentPosts?.length || 0,
-                performance_level: instagramData ? classifyPerformance(selectedMetric as ValidMetric, instagramData) : 'unknown'
-              }}
-            >
+              {/* AI Response with Enhanced Results */}
               <div className="flex items-start space-x-3">
                 <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
                   <span className="text-white text-sm font-bold">AI</span>
                 </div>
                 <div className="bg-white rounded-2xl rounded-tl-sm p-4 shadow-sm border border-indigo-100 flex-1">
-                  {(() => {
-                    const recs = getAIRecommendations();
-                    return (
-                      <div>
-                        <div className="flex items-center space-x-2 mb-4">
-                          <span className="text-lg">📈</span>
-                          <h3 className="font-bold text-gray-900 text-lg">{recs.title}</h3>
+                  
+                  {/* Hero Insight Cards for All Sections */}
+                  {selectedMetric === 'discovery' && (
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-100 rounded-2xl p-6 mb-6">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center">
+                          <Target className="w-6 h-6 text-white" />
                         </div>
-                        
-                        <p className="text-sm text-indigo-600 mb-4">
-                          Based on your {instagramData?.recentPosts?.length || 0} posts, here's what I found...
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">Your Biggest Growth Opportunity</h3>
+                          <p className="text-blue-700 text-sm">Based on your recent performance</p>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white/80 rounded-xl p-4 mb-4">
+                        <p className="text-gray-800 leading-relaxed">
+                          {recommendations.heroInsight}
                         </p>
+                      </div>
+                      
+                      <button 
+                        onClick={() => setShowDetailedAnalysis(true)}
+                        className="w-full bg-blue-600 text-white rounded-lg py-3 font-medium hover:bg-blue-700 transition-colors"
+                      >
+                        Show Me How →
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Engagement Quality Hero Insight */}
+                  {selectedMetric === 'engagement_quality' && (
+                    <div className="bg-gradient-to-br from-purple-50 to-pink-100 rounded-2xl p-6 mb-6">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <div className="w-12 h-12 bg-purple-500 rounded-full flex items-center justify-center">
+                          <TrendingUp className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">Your Engagement Quality Opportunity</h3>
+                          <p className="text-purple-700 text-sm">Based on your content value analysis</p>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white/80 rounded-xl p-4 mb-4">
+                        <p className="text-gray-800 leading-relaxed">
+                          {(() => {
+                            const engagementQuality = analyzeEngagementQuality(instagramData?.recentPosts || []);
+                            if (engagementQuality) {
+                              if (parseFloat(engagementQuality.avgSaveToLikeRatio) > 4) {
+                                return `Excellent! Your ${engagementQuality.avgSaveToLikeRatio}% save rate shows people find your content valuable. ${engagementQuality.highValuePostsPercentage}% of your posts drive high-quality engagement.`;
+                              } else if (parseFloat(engagementQuality.avgSaveToLikeRatio) > 2) {
+                                return `Your ${engagementQuality.avgSaveToLikeRatio}% save rate is good, but we can boost it to 5%+ by creating more educational content. Currently ${engagementQuality.highValuePostsPercentage}% of posts drive high-value engagement.`;
+                              } else {
+                                return `Your ${engagementQuality.avgSaveToLikeRatio}% save rate has room to grow. Creating more educational, reference-worthy content could double your save rate and improve long-term growth.`;
+                              }
+                            }
+                            return "I need more engagement data to analyze your content quality.";
+                          })()}
+                        </p>
+                      </div>
+                      
+                      <button 
+                        onClick={() => setShowDetailedAnalysis(true)}
+                        className="w-full bg-purple-600 text-white rounded-lg py-3 font-medium hover:bg-purple-700 transition-colors"
+                      >
+                        Show Quality Breakdown →
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Timing Hero Insight */}
+                  {selectedMetric === 'timing' && (
+                    <div className="bg-gradient-to-br from-orange-50 to-red-100 rounded-2xl p-6 mb-6">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <div className="w-12 h-12 bg-orange-500 rounded-full flex items-center justify-center">
+                          <Clock className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">Your Timing Optimization Opportunity</h3>
+                          <p className="text-orange-700 text-sm">Based on your posting pattern analysis</p>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white/80 rounded-xl p-4 mb-4">
+                        <p className="text-gray-800 leading-relaxed">
+                          {(() => {
+                            const timingData = instagramData?.recentPosts ? calculateTimingOptimization(instagramData.recentPosts) : null;
+                            if (timingData?.timeSlots && timingData.timeSlots.length > 0) {
+                              const bestTime = timingData.timeSlots[0];
+                              const avgEngagement = instagramData?.avgLikes || 0;
+                              const improvement = avgEngagement > 0 ? Math.round(((bestTime.avgLikes - avgEngagement) / avgEngagement) * 100) : 0;
+                              return `Your best posting time is ${bestTime.time} with ${bestTime.avgLikes} average likes. This is ${improvement}% better than your overall average - posting consistently at optimal times could significantly boost your reach.`;
+                            }
+                            return "I need more posts at different times to identify your optimal posting windows.";
+                          })()}
+                        </p>
+                      </div>
+                      
+                      <button 
+                        onClick={() => setShowDetailedAnalysis(true)}
+                        className="w-full bg-orange-600 text-white rounded-lg py-3 font-medium hover:bg-orange-700 transition-colors"
+                      >
+                        Show Timing Analysis →
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Frequency Hero Insight */}
+{selectedMetric === 'frequency' && (
+  <div className="bg-gradient-to-br from-emerald-50 to-green-100 rounded-2xl p-6 mb-6">
+    <div className="flex items-center space-x-3 mb-4">
+      <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center">
+        <BarChart3 className="w-6 h-6 text-white" />
+      </div>
+      <div>
+        <h3 className="text-lg font-bold text-gray-900">Your Posting Frequency Opportunity</h3>
+        <p className="text-emerald-700 text-sm">Based on your posting patterns and engagement analysis</p>
+      </div>
+    </div>
+    
+    <div className="bg-white/80 rounded-xl p-4 mb-4">
+      <p className="text-gray-800 leading-relaxed">
+        {(() => {
+          const frequencyData = instagramData?.recentPosts ? calculateFrequencyOptimization(instagramData.recentPosts) : null;
+          if (frequencyData) {
+            const difference = Math.abs(frequencyData.optimalFrequency - frequencyData.currentFrequency);
+            if (difference === 0) {
+              return `Perfect! You're posting ${frequencyData.currentFrequency} times per week, which is optimal for your audience. Your ${frequencyData.consistencyScore}% consistency score shows you're maintaining a${frequencyData.consistencyScore > 70 ? ' great' : 'n okay'} posting rhythm.`;
+            } else if (frequencyData.currentFrequency < frequencyData.optimalFrequency) {
+              return `You're posting ${frequencyData.currentFrequency} times per week, but ${frequencyData.optimalFrequency} would be optimal. Increasing your frequency could boost engagement by ${difference * 15}%. Your consistency score is ${frequencyData.consistencyScore}%.`;
+            } else {
+              return `You're posting ${frequencyData.currentFrequency} times per week, but ${frequencyData.optimalFrequency} would be better to avoid audience fatigue. Your consistency score is ${frequencyData.consistencyScore}%.`;
+            }
+          }
+          return "I need more posting history to analyze your optimal frequency patterns.";
+        })()}
+      </p>
+    </div>
+    
+    <button 
+      onClick={() => setShowDetailedAnalysis(true)}
+      className="w-full bg-emerald-600 text-white rounded-lg py-3 font-medium hover:bg-emerald-700 transition-colors"
+    >
+      Show Frequency Breakdown →
+    </button>
+  </div>
+)}
+
+{/* Sentiment Hero Insight */}
+{selectedMetric === 'sentiment' && (
+  <div className="bg-gradient-to-br from-pink-50 to-rose-100 rounded-2xl p-6 mb-6">
+    <div className="flex items-center space-x-3 mb-4">
+      <div className="w-12 h-12 bg-pink-500 rounded-full flex items-center justify-center">
+        <Users className="w-6 h-6 text-white" />
+      </div>
+      <div>
+        <h3 className="text-lg font-bold text-gray-900">Your Audience Sentiment Insights</h3>
+        <p className="text-pink-700 text-sm">Based on comment analysis across your content</p>
+      </div>
+    </div>
+    
+    <div className="bg-white/80 rounded-xl p-4 mb-4">
+      <p className="text-gray-800 leading-relaxed">
+        {(() => {
+          const sentimentData = instagramData?.recentPosts ? analyzeSentiment(instagramData.recentPosts) : null;
+          if (sentimentData) {
+            const { overallSentiment, insights } = sentimentData;
+            const trend = insights.sentimentTrend === 'improving' ? 'improving' : 
+                         insights.sentimentTrend === 'declining' ? 'declining' : 'staying stable';
+            
+            return `${overallSentiment.positive}% of your comments are positive, with ${overallSentiment.negative}% negative reactions. Your ${insights.bestContentType || 'content'} performs best with audiences, and sentiment is ${trend} over time. You've analyzed ${overallSentiment.totalComments} comments for accurate insights.`;
+          }
+          return "I need more comments on your posts to analyze how your audience truly feels about your content.";
+        })()}
+      </p>
+    </div>
+    
+    <button 
+      onClick={() => setShowDetailedAnalysis(true)}
+      className="w-full bg-pink-600 text-white rounded-lg py-3 font-medium hover:bg-pink-700 transition-colors"
+    >
+      Show Sentiment Breakdown →
+    </button>
+  </div>
+)}
+
+                  {/* A/B Testing Hero Insight */}
+                  {selectedMetric === 'ab_testing' && (
+                    <div className="bg-gradient-to-br from-green-50 to-emerald-100 rounded-2xl p-6 mb-6">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center">
+                          <TestTube className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">Your A/B Testing Opportunities</h3>
+                          <p className="text-green-700 text-sm">Based on your content patterns</p>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white/80 rounded-xl p-4 mb-4">
+                        <p className="text-gray-800 leading-relaxed">
+                          {(() => {
+                            const abTestSuggestions = generateABTestSuggestions(instagramData?.recentPosts || []);
+                            if (abTestSuggestions.length > 0) {
+                              return `I found ${abTestSuggestions.length} ready-to-run tests based on your posting patterns. Start with ${abTestSuggestions[0].type.toLowerCase()} tests for the highest impact - they have ${abTestSuggestions[0].confidence.toLowerCase()} confidence based on your data.`;
+                            }
+                            return "I need more posting history to generate specific A/B test recommendations. Post consistently for 2-3 weeks to unlock testing opportunities.";
+                          })()}
+                        </p>
+                      </div>
+                      
+                      <button 
+                        onClick={() => setShowDetailedAnalysis(true)}
+                        className="w-full bg-green-600 text-white rounded-lg py-3 font-medium hover:bg-green-700 transition-colors"
+                      >
+                        Show Test Ideas →
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Content Gaps Hero Insight */}
+                  {selectedMetric === 'content_gaps' && (
+                    <div className="bg-gradient-to-br from-yellow-50 to-orange-100 rounded-2xl p-6 mb-6">
+                      <div className="flex items-center space-x-3 mb-4">
+                        <div className="w-12 h-12 bg-yellow-500 rounded-full flex items-center justify-center">
+                          <Search className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">Your Content Strategy Gaps</h3>
+                          <p className="text-yellow-700 text-sm">Based on your posting history</p>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white/80 rounded-xl p-4 mb-4">
+                        <p className="text-gray-800 leading-relaxed">
+                          {(() => {
+                            const contentGaps = analyzeContentGaps(instagramData?.recentPosts || []);
+                            if (contentGaps.length > 0) {
+                              return `I identified ${contentGaps.length} content gaps that could be limiting your reach. The biggest opportunity is: ${contentGaps[0].description.toLowerCase()}.`;
+                            }
+                            return "Your content strategy is well-balanced! No major gaps detected. You're posting a good variety of content types consistently.";
+                          })()}
+                        </p>
+                      </div>
+                      
+                      <button 
+                        onClick={() => setShowDetailedAnalysis(true)}
+                        className="w-full bg-yellow-600 text-white rounded-lg py-3 font-medium hover:bg-yellow-700 transition-colors"
+                      >
+                        Show Gap Analysis →
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Visual Performance Cards */}
+                  {showDetailedAnalysis && selectedMetric === 'discovery' && (() => {
+                    const discoveryAnalysis = analyzeDiscoveryPotential(instagramData?.recentPosts || []);
+                    const reachAnalysis = analyzeReachOptimization(instagramData?.recentPosts || [], instagramData?.followers || 0);
+                    
+                    return (
+                      <div className="space-y-4 mb-6">
+                        <h4 className="font-semibold text-gray-900">Your Performance Snapshot</h4>
                         
-                        {/* Key Insights */}
-                        <div className="mb-6">
-                          <div className="flex items-center space-x-2 mb-3">
-                            <span className="text-base">📊</span>
-                            <h4 className="font-semibold text-gray-800">Key Insights</h4>
+                        {/* Growth Power Card */}
+                        <div className="bg-white rounded-xl p-4 border border-gray-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center space-x-2">
+                              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                                <TrendingUp className="w-4 h-4 text-green-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Growth Power</span>
+                            </div>
+                            <span className="text-2xl font-bold text-green-600">
+                              {reachAnalysis ? `${reachAnalysis.reachToFollowerRatio}%` : '73%'}
+                            </span>
                           </div>
-                          <div className="space-y-3">
-                            {recs.insights.map((insight, index) => (
-                              <ViewTracker
-                                key={index}
-                                featureName={`ai_insight_${index + 1}`}
-                                metadata={{
-                                  metric: selectedMetric,
-                                  insight_index: index + 1
-                                }}
-                              >
-                                <div className="flex items-start space-x-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
-                                  <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                                    <span className="text-white text-xs font-bold">{index + 1}</span>
-                                  </div>
-                                  <p className="text-sm text-blue-800 leading-relaxed">{insight}</p>
-                                </div>
-                              </ViewTracker>
-                            ))}
+                          
+                          <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+                            <div 
+                              className="bg-green-500 h-2 rounded-full" 
+                              style={{width: reachAnalysis ? `${Math.min(parseFloat(reachAnalysis.reachToFollowerRatio), 100)}%` : '73%'}}
+                            ></div>
                           </div>
+                          
+                          <p className="text-sm text-gray-600">
+                            Your content reaches this percentage of your followers on average
+                          </p>
+                          <p className="text-xs text-green-700 mt-1">
+                            ✓ {reachAnalysis && parseFloat(reachAnalysis.reachToFollowerRatio) > 50 ? 'Above average (50%+ is good)' : 'Room for improvement'}
+                          </p>
                         </div>
 
-                        {/* Action Steps */}
-                        <div className="mb-6">
-                          <div className="flex items-center space-x-2 mb-3">
-                            <span className="text-base">🚀</span>
-                            <h4 className="font-semibold text-gray-800">Action Steps</h4>
+                        {/* Content Type Performance */}
+                        {discoveryAnalysis && (
+                          <div className="bg-white rounded-xl p-4 border border-gray-200">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                                <BarChart3 className="w-4 h-4 text-purple-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Best Content Type</span>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              {discoveryAnalysis.slice(0, 3).map((content, index) => {
+                                const maxReach = discoveryAnalysis[0].avgReach;
+                                const percentage = (content.avgReach / maxReach) * 100;
+                                const emoji = content.contentType === 'VIDEO' ? '🎬' : 
+                                             content.contentType === 'CAROUSEL_ALBUM' ? '📸' : '📝';
+                                const color = index === 0 ? 'purple' : index === 1 ? 'blue' : 'gray';
+                                
+                                return (
+                                  <PerformanceBar
+                                    key={content.contentType}
+                                    label={`${emoji} ${content.label}`}
+                                    value={content.avgReach}
+                                    maxValue={maxReach}
+                                    color={color}
+                                  />
+                                );
+                              })}
+                            </div>
+                            
+                            <p className="text-xs text-gray-600 mt-2">Average reach per post</p>
                           </div>
-                          <div className="space-y-3">
-                            {recs.actions.map((action, index) => (
-                              <ViewTracker
-                                key={index}
-                                featureName={`ai_action_${index + 1}`}
-                                metadata={{
-                                  metric: selectedMetric,
-                                  action_index: index + 1
-                                }}
-                              >
-                                <div className="flex items-start space-x-3 p-3 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200">
-                                  <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                                    <span className="text-white text-xs font-bold">✓</span>
-                                  </div>
-                                  <p className="text-sm text-green-800 leading-relaxed">{action}</p>
-                                </div>
-                              </ViewTracker>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                          <p className="text-sm text-gray-700">{recs.closer}</p>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div className="grid grid-cols-2 gap-3">
-                          <ClickTracker
-                            featureName="ai_new_analysis_button"
-                            metadata={{ previous_metric: selectedMetric }}
-                          >
-                            <button 
-                              onClick={resetChat}
-                              className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl py-3 px-4 font-medium text-sm shadow-sm hover:shadow-md transition-all"
-                            >
-                              New Analysis
-                            </button>
-                          </ClickTracker>
-                          <ClickTracker
-                            featureName="ai_export_report_button"
-                            metadata={{ 
-                              metric: selectedMetric,
-                              insights_count: recs.insights.length,
-                              actions_count: recs.actions.length
-                            }}
-                          >
-                            <button className="bg-white border-2 border-indigo-200 text-indigo-600 rounded-xl py-3 px-4 font-medium text-sm hover:bg-indigo-50 transition-all">
-                              Export Report
-                            </button>
-                          </ClickTracker>
-                        </div>
+                        )}
                       </div>
                     );
                   })()}
+
+                  {/* Engagement Quality Detailed Analysis */}
+                  {showDetailedAnalysis && selectedMetric === 'engagement_quality' && (() => {
+                    const engagementQuality = analyzeEngagementQuality(instagramData?.recentPosts || []);
+                    const discoveryAnalysis = analyzeDiscoveryPotential(instagramData?.recentPosts || []);
+                    
+                    return (
+                      <div className="space-y-4 mb-6">
+                        <h4 className="font-semibold text-gray-900">Your Engagement Quality Breakdown</h4>
+                        
+                        {/* Content Value Score Card */}
+                        <div className="bg-white rounded-xl p-4 border border-gray-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center space-x-2">
+                              <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                                <TrendingUp className="w-4 h-4 text-purple-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Content Value Score</span>
+                            </div>
+                            <span className="text-2xl font-bold text-purple-600">
+                              {engagementQuality ? `${engagementQuality.avgSaveToLikeRatio}%` : '2.1%'}
+                            </span>
+                          </div>
+                          
+                          <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+                            <div 
+                              className="bg-purple-500 h-2 rounded-full" 
+                              style={{width: engagementQuality ? `${Math.min(parseFloat(engagementQuality.avgSaveToLikeRatio) * 10, 100)}%` : '21%'}}
+                            ></div>
+                          </div>
+                          
+                          <p className="text-sm text-gray-600">
+                            Percentage of people who save your posts (higher = more valuable)
+                          </p>
+                          <p className="text-xs text-purple-700 mt-1">
+                            {engagementQuality ? (
+                              parseFloat(engagementQuality.avgSaveToLikeRatio) > 4 ? '✓ Excellent value content' : 
+                              parseFloat(engagementQuality.avgSaveToLikeRatio) > 2 ? '✓ Good, aim for 5%+' : 
+                              '⚡ Focus on educational content'
+                            ) : '⚡ Focus on educational content'}
+                          </p>
+                        </div>
+
+                        {/* Engagement Types Breakdown - REMOVED SHARES */}
+                        <div className="bg-white rounded-xl p-4 border border-gray-200">
+                          <div className="flex items-center space-x-2 mb-3">
+                            <div className="w-8 h-8 bg-pink-100 rounded-full flex items-center justify-center">
+                              <BarChart3 className="w-4 h-4 text-pink-600" />
+                            </div>
+                            <span className="font-medium text-gray-900">Engagement Quality Types</span>
+                          </div>
+                          
+                          <div className="space-y-2">
+                            <PerformanceBar
+                              label="💾 Saves (High Value)"
+                              value={engagementQuality ? parseFloat(engagementQuality.avgSaveToLikeRatio) : 2.1}
+                              maxValue={10}
+                              color="purple"
+                            />
+                            <PerformanceBar
+                              label="💬 Comments (Conversation)"
+                              value={engagementQuality ? parseFloat(engagementQuality.avgCommentToLikeRatio) : 7.3}
+                              maxValue={20}
+                              color="blue"
+                            />
+                            <PerformanceBar
+                              label="❤️ Likes (Basic Engagement)"
+                              value={100}
+                              maxValue={100}
+                              color="gray"
+                            />
+                          </div>
+                          
+                          <p className="text-xs text-gray-600 mt-2">
+                            High-value posts: {engagementQuality ? `${engagementQuality.highValuePostsPercentage}%` : '34%'} 
+                            (saves and deep comments)
+                          </p>
+                        </div>
+
+                        {/* Top Performing Content by Engagement */}
+                        {discoveryAnalysis && (
+                          <div className="bg-white rounded-xl p-4 border border-gray-200">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                                <Target className="w-4 h-4 text-green-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Best Content for Quality Engagement</span>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              {discoveryAnalysis.slice(0, 3).map((content, index) => {
+                                const emoji = content.contentType === 'VIDEO' ? '🎬' : 
+                                             content.contentType === 'CAROUSEL_ALBUM' ? '📸' : '📝';
+                                const color = index === 0 ? 'green' : index === 1 ? 'blue' : 'gray';
+                                
+                                return (
+                                  <PerformanceBar
+                                    key={content.contentType}
+                                    label={`${emoji} ${content.label}`}
+                                    value={content.avgProfileVisits}
+                                    maxValue={discoveryAnalysis[0].avgProfileVisits}
+                                    color={color}
+                                  />
+                                );
+                              })}
+                            </div>
+                            
+                            <p className="text-xs text-gray-600 mt-2">Average profile visits per post (indicates content value)</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Timing Detailed Analysis */}
+                  {showDetailedAnalysis && selectedMetric === 'timing' && (() => {
+                    const timingData = instagramData?.recentPosts ? calculateTimingOptimization(instagramData.recentPosts) : null;
+                    const dayOfWeekPerformance = timingData ? analyzeDayOfWeekPerformance(instagramData?.recentPosts ?? []) : null;
+                    
+                    return (
+                      <div className="space-y-4 mb-6">
+                        <h4 className="font-semibold text-gray-900">Your Timing Analysis</h4>
+                        
+                        {/* Best Time Performance */}
+                        <div className="bg-white rounded-xl p-4 border border-gray-200">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center space-x-2">
+                              <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
+                                <Clock className="w-4 h-4 text-orange-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Peak Performance Time</span>
+                            </div>
+                            <span className="text-2xl font-bold text-orange-600">
+                              {timingData?.timeSlots?.[0]?.time || '7:30 PM'}
+                            </span>
+                          </div>
+                          
+                          <div className="bg-orange-50 rounded-lg p-3 mb-3">
+                            <p className="text-sm text-orange-800">
+                              <strong>Best Time:</strong> {timingData?.timeSlots?.[0]?.time || '7:30 PM'} with {timingData?.timeSlots?.[0]?.avgLikes || '342'} avg likes
+                            </p>
+                            <p className="text-xs text-orange-700 mt-1">
+                              Based on {timingData?.timeSlots?.[0]?.postCount || '15'} posts at this time
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Top 5 Time Slots */}
+                        {timingData?.timeSlots && (
+                          <div className="bg-white rounded-xl p-4 border border-gray-200">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
+                                <BarChart3 className="w-4 h-4 text-red-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Top 5 Posting Times</span>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              {timingData.timeSlots.slice(0, 5).map((slot, index) => {
+                                const maxEngagement = timingData.timeSlots[0].avgLikes;
+                                const color = index === 0 ? 'orange' : index === 1 ? 'blue' : 'gray';
+                                
+                                return (
+                                  <div key={index} className="flex items-center justify-between">
+                                    <span className="text-sm text-gray-700 min-w-[100px]">{slot.time}</span>
+                                    <div className="flex items-center space-x-2 flex-1 mx-3">
+                                      <div className="w-full bg-gray-200 rounded-full h-2">
+                                        <div 
+                                          className={`h-2 rounded-full ${
+                                            color === 'orange' ? 'bg-orange-500' : 
+                                            color === 'blue' ? 'bg-blue-500' : 'bg-gray-400'
+                                          }`}
+                                          style={{width: `${(slot.avgLikes / maxEngagement) * 100}%`}}
+                                        ></div>
+                                      </div>
+                                    </div>
+                                    <span className="text-sm font-bold text-gray-900 min-w-[40px]">{slot.avgLikes}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            
+                            <p className="text-xs text-gray-600 mt-2">Average likes per post at each time</p>
+                          </div>
+                        )}
+
+                        {/* Day of Week Performance */}
+                        {dayOfWeekPerformance && (
+                          <div className="bg-white rounded-xl p-4 border border-gray-200">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                                <TrendingUp className="w-4 h-4 text-purple-600" />
+                              </div>
+                              <span className="font-medium text-gray-900">Best Days to Post</span>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              {dayOfWeekPerformance.slice(0, 3).map((day, index) => {
+                                const maxEngagement = dayOfWeekPerformance[0].avgEngagement;
+                                const color = index === 0 ? 'purple' : index === 1 ? 'blue' : 'green';
+                                
+                                return (
+                                  <PerformanceBar
+                                    key={day.day}
+                                    label={`${day.day} (${day.postCount} posts)`}
+                                    value={day.avgEngagement}
+                                    maxValue={maxEngagement}
+                                    color={color}
+                                  />
+                                );
+                              })}
+                            </div>
+                            
+                            <p className="text-xs text-gray-600 mt-2">Average engagement by day of week</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Frequency Detailed Analysis */}
+{showDetailedAnalysis && selectedMetric === 'frequency' && (() => {
+  const frequencyData = instagramData?.recentPosts ? calculateFrequencyOptimization(instagramData.recentPosts) : null;
+  
+  return (
+    <div className="space-y-4 mb-6">
+      <h4 className="font-semibold text-gray-900">Your Frequency Analysis</h4>
+      
+      {frequencyData ? (
+        <>
+          {/* Current vs Optimal Frequency Comparison */}
+          <div className="bg-white rounded-xl p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
+                  <BarChart3 className="w-4 h-4 text-emerald-600" />
                 </div>
+                <span className="font-medium text-gray-900">Frequency Comparison</span>
               </div>
-            </ViewTracker>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="text-center bg-blue-50 rounded-lg p-3">
+                <div className="text-2xl font-bold text-blue-600">{frequencyData.currentFrequency}</div>
+                <div className="text-sm text-blue-700">Current</div>
+                <div className="text-xs text-gray-600">posts/week</div>
+              </div>
+              <div className="text-center bg-emerald-50 rounded-lg p-3">
+                <div className="text-2xl font-bold text-emerald-600">{frequencyData.optimalFrequency}</div>
+                <div className="text-sm text-emerald-700">Optimal</div>
+                <div className="text-xs text-gray-600">posts/week</div>
+              </div>
+            </div>
+            
+            <div className="bg-emerald-50 rounded-lg p-3">
+              <p className="text-sm text-emerald-800">
+                {frequencyData.currentFrequency === frequencyData.optimalFrequency ? 
+                  '✓ You\'re posting at the optimal frequency!' :
+                  frequencyData.currentFrequency < frequencyData.optimalFrequency ?
+                  `⚡ Posting ${frequencyData.optimalFrequency - frequencyData.currentFrequency} more times per week could boost engagement` :
+                  `⚠️ Consider reducing by ${frequencyData.currentFrequency - frequencyData.optimalFrequency} posts/week to avoid audience fatigue`
+                }
+              </p>
+            </div>
+          </div>
+
+          {/* Consistency Score */}
+          <div className="bg-white rounded-xl p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                  <Clock className="w-4 h-4 text-purple-600" />
+                </div>
+                <span className="font-medium text-gray-900">Posting Consistency</span>
+              </div>
+              <span className="text-2xl font-bold text-purple-600">{frequencyData.consistencyScore}%</span>
+            </div>
+            
+            <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
+              <div 
+                className="bg-purple-500 h-3 rounded-full transition-all duration-1000" 
+                style={{width: `${frequencyData.consistencyScore}%`}}
+              ></div>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-2">
+              How regularly you maintain your posting schedule
+            </p>
+            <p className={`text-xs ${
+              frequencyData.consistencyScore >= 80 ? 'text-green-700' :
+              frequencyData.consistencyScore >= 60 ? 'text-yellow-700' : 'text-red-700'
+            }`}>
+              {frequencyData.consistencyScore >= 80 ? '✓ Excellent consistency - your audience knows when to expect content' :
+               frequencyData.consistencyScore >= 60 ? '⚡ Good consistency - try to post on more regular days' : 
+               '⚠️ Irregular posting - consider creating a content calendar'}
+            </p>
+          </div>
+
+          {/* Performance by Frequency */}
+          {frequencyData.performanceByFrequency.length > 0 && (
+            <div className="bg-white rounded-xl p-4 border border-gray-200">
+              <div className="flex items-center space-x-2 mb-3">
+                <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                  <TrendingUp className="w-4 h-4 text-green-600" />
+                </div>
+                <span className="font-medium text-gray-900">Performance by Frequency</span>
+              </div>
+              
+              <div className="space-y-2">
+                {frequencyData.performanceByFrequency.slice(0, 4).map((bucket, index) => {
+                  const maxEngagement = frequencyData.performanceByFrequency[0].avgEngagement;
+                  const color = index === 0 ? 'emerald' : index === 1 ? 'blue' : index === 2 ? 'purple' : 'gray';
+                  const isOptimal = bucket.range.includes(frequencyData.optimalFrequency.toString());
+                  
+                  return (
+                    <div key={index} className={`flex items-center justify-between p-2 rounded-lg ${
+                      isOptimal ? 'bg-emerald-50 border border-emerald-200' : 'bg-gray-50'
+                    }`}>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm text-gray-700 min-w-[100px]">{bucket.range}</span>
+                        {isOptimal && <span className="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">Optimal</span>}
+                      </div>
+                      <div className="flex items-center space-x-2 flex-1 mx-3">
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className={`h-2 rounded-full ${
+                              color === 'emerald' ? 'bg-emerald-500' : 
+                              color === 'blue' ? 'bg-blue-500' : 
+                              color === 'purple' ? 'bg-purple-500' : 'bg-gray-400'
+                            }`}
+                            style={{width: `${(bucket.avgEngagement / maxEngagement) * 100}%`}}
+                          ></div>
+                        </div>
+                      </div>
+                      <span className="text-sm font-bold text-gray-900 min-w-[40px]">{bucket.avgEngagement}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              
+              <p className="text-xs text-gray-600 mt-2">Average engagement per post at different frequencies</p>
+            </div>
           )}
 
+          {/* Weekly Pattern */}
+          {frequencyData.weeklyPattern.length > 0 && (
+            <div className="bg-white rounded-xl p-4 border border-gray-200">
+              <div className="flex items-center space-x-2 mb-3">
+                <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
+                  <BarChart3 className="w-4 h-4 text-orange-600" />
+                </div>
+                <span className="font-medium text-gray-900">Recent Weekly Pattern</span>
+              </div>
+              
+              <div className="space-y-2">
+                {frequencyData.weeklyPattern.slice(-4).map((week, index) => (
+                  <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-700 flex-1">{week.week}</span>
+                    <div className="flex items-center space-x-3">
+                      <span className="text-sm font-medium text-gray-900">{week.postCount} posts</span>
+                      <span className="text-sm text-orange-600">{week.avgEngagement} avg</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <p className="text-xs text-gray-600 mt-2">Your posting frequency over recent weeks</p>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="bg-white rounded-xl p-6 border border-gray-200 text-center">
+          <BarChart3 className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+          <h5 className="font-medium text-gray-900 mb-2">Need More Posting History</h5>
+          <p className="text-sm text-gray-600">
+            Post consistently for 2-3 weeks to unlock frequency optimization insights.
+          </p>
         </div>
+      )}
+    </div>
+  );
+})()}
 
-        {/* Quick Actions */}
-        <div className="mt-8 pt-6 border-t border-indigo-200">
-          <h3 className="font-semibold text-gray-900 mb-3 text-sm">Quick Insights</h3>
-          <div className="grid grid-cols-2 gap-3">
-            <ClickTracker
-              featureName="ai_quick_growth_tips"
-              metadata={{ from_section: 'quick_actions' }}
-            >
-              <button 
-                onClick={() => {
-                  setSelectedMetric('growth');
-                  setChatStep(2);
-                }}
-                className="p-3 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all text-left"
-              >
-                <div className="flex items-center space-x-2 mb-1">
-                  <span className="text-green-500">🚀</span>
-                  <span className="font-medium text-gray-900 text-sm">Growth Tips</span>
-                </div>
-                <p className="text-xs text-gray-600">Boost your followers</p>
-              </button>
-            </ClickTracker>
+{/* Sentiment Detailed Analysis */}
+{showDetailedAnalysis && selectedMetric === 'sentiment' && (() => {
+  const sentimentData = instagramData?.recentPosts ? analyzeSentiment(instagramData.recentPosts) : null;
+  
+  return (
+    <div className="space-y-4 mb-6">
+      <h4 className="font-semibold text-gray-900">Your Sentiment Analysis</h4>
+      
+      {sentimentData ? (
+        <>
+          {/* Overall Sentiment Breakdown */}
+          <div className="bg-white rounded-xl p-4 border border-gray-200">
+            <div className="flex items-center space-x-2 mb-3">
+              <div className="w-8 h-8 bg-pink-100 rounded-full flex items-center justify-center">
+                <Users className="w-4 h-4 text-pink-600" />
+              </div>
+              <span className="font-medium text-gray-900">Overall Sentiment Breakdown</span>
+            </div>
             
-            <ClickTracker
-              featureName="ai_quick_timing_tips"
-              metadata={{ from_section: 'quick_actions' }}
-            >
-              <button 
-                onClick={() => {
-                  setSelectedMetric('timing');
-                  setChatStep(2);
-                }}
-                className="p-3 bg-white border border-indigo-200 rounded-xl hover:bg-indigo-50 transition-all text-left"
-              >
-                <div className="flex items-center space-x-2 mb-1">
-                  <span className="text-purple-500">⏰</span>
-                  <span className="font-medium text-gray-900 text-sm">Best Times</span>
-                </div>
-                <p className="text-xs text-gray-600">When to post</p>
-              </button>
-            </ClickTracker>
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="text-center bg-green-50 rounded-lg p-3">
+                <div className="text-2xl font-bold text-green-600">{sentimentData.overallSentiment.positive}%</div>
+                <div className="text-sm text-green-700">Positive</div>
+                <div className="text-xs text-gray-600">reactions</div>
+              </div>
+              <div className="text-center bg-gray-50 rounded-lg p-3">
+                <div className="text-2xl font-bold text-gray-600">{sentimentData.overallSentiment.neutral}%</div>
+                <div className="text-sm text-gray-700">Neutral</div>
+                <div className="text-xs text-gray-600">reactions</div>
+              </div>
+              <div className="text-center bg-red-50 rounded-lg p-3">
+                <div className="text-2xl font-bold text-red-600">{sentimentData.overallSentiment.negative}%</div>
+                <div className="text-sm text-red-700">Negative</div>
+                <div className="text-xs text-gray-600">reactions</div>
+              </div>
+            </div>
+            
+            <p className="text-xs text-gray-600 text-center">
+              Based on {sentimentData.overallSentiment.totalComments} comments analyzed
+            </p>
           </div>
+
+          {/* Sentiment by Content Type */}
+          <div className="bg-white rounded-xl p-4 border border-gray-200">
+            <div className="flex items-center space-x-2 mb-3">
+              <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                <BarChart3 className="w-4 h-4 text-purple-600" />
+              </div>
+              <span className="font-medium text-gray-900">Sentiment by Content Type</span>
+            </div>
+            
+            <div className="space-y-3">
+              {sentimentData.contentTypeAnalysis.map((content, index) => {
+                const emoji = content.contentType === 'Reels' ? '🎬' : 
+                             content.contentType === 'Carousels' ? '📸' : '📝';
+                
+                return (
+                  <div key={content.contentType} className="bg-gray-50 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-gray-900">{emoji} {content.contentType}</span>
+                      <span className={`text-sm font-bold ${
+                        content.sentiment_score > 20 ? 'text-green-600' :
+                        content.sentiment_score > 0 ? 'text-blue-600' : 'text-red-600'
+                      }`}>
+                        {content.sentiment_score > 0 ? '+' : ''}{content.sentiment_score}
+                      </span>
+                    </div>
+                    
+                    <div className="flex space-x-1 mb-2">
+                      <div 
+                        className="bg-green-500 h-2 rounded-l"
+                        style={{width: `${content.positive}%`}}
+                      ></div>
+                      <div 
+                        className="bg-gray-400 h-2"
+                        style={{width: `${content.neutral}%`}}
+                      ></div>
+                      <div 
+                        className="bg-red-500 h-2 rounded-r"
+                        style={{width: `${content.negative}%`}}
+                      ></div>
+                    </div>
+                    
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>{content.positive}% positive</span>
+                      <span>{content.totalComments} comments</span>
+                      <span>{content.negative}% negative</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Sentiment Over Time */}
+          {sentimentData.timeAnalysis.length > 1 && (
+            <div className="bg-white rounded-xl p-4 border border-gray-200">
+              <div className="flex items-center space-x-2 mb-3">
+                <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                  <TrendingUp className="w-4 h-4 text-blue-600" />
+                </div>
+                <span className="font-medium text-gray-900">Sentiment Trend (Last 6 Months)</span>
+              </div>
+              
+              <div className="space-y-2">
+                {sentimentData.timeAnalysis.map((month, index) => {
+                  const monthName = new Date(month.month + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                  
+                  return (
+                    <div key={month.month} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                      <span className="text-sm text-gray-700 min-w-[80px]">{monthName}</span>
+                      <div className="flex items-center space-x-2 flex-1 mx-3">
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className={`h-2 rounded-full ${
+                              month.sentiment_score > 20 ? 'bg-green-500' :
+                              month.sentiment_score > 0 ? 'bg-blue-500' : 'bg-red-500'
+                            }`}
+                            style={{width: `${Math.abs(month.sentiment_score) + 20}%`}}
+                          ></div>
+                        </div>
+                      </div>
+                      <span className={`text-sm font-bold min-w-[40px] text-right ${
+                        month.sentiment_score > 20 ? 'text-green-600' :
+                        month.sentiment_score > 0 ? 'text-blue-600' : 'text-red-600'
+                      }`}>
+                        {month.sentiment_score > 0 ? '+' : ''}{month.sentiment_score}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="bg-white rounded-xl p-6 border border-gray-200 text-center">
+          <Users className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+          <h5 className="font-medium text-gray-900 mb-2">Need More Comment Data</h5>
+          <p className="text-sm text-gray-600">
+            Post content that encourages comments to unlock sentiment analysis insights.
+          </p>
         </div>
+      )}
+    </div>
+  );
+})()}
+
+                  {/* A/B Testing Detailed Analysis */}
+                  {showDetailedAnalysis && selectedMetric === 'ab_testing' && (() => {
+                    const abTestSuggestions = generateABTestSuggestions(instagramData?.recentPosts || []);
+                    
+                    return (
+                      <div className="space-y-4 mb-6">
+                        <h4 className="font-semibold text-gray-900">Ready-to-Run Tests</h4>
+                        
+                        {abTestSuggestions.length > 0 ? abTestSuggestions.map((test, index) => (
+                          <div key={index} className="bg-white rounded-xl p-4 border border-gray-200">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center space-x-2">
+                                <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+                                  <span className="text-green-600 text-sm font-bold">{index + 1}</span>
+                                </div>
+                                <span className="font-medium text-gray-900">{test.type} Test</span>
+                              </div>
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                test.confidence === 'High' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                              }`}>
+                                {test.confidence} Confidence
+                              </span>
+                            </div>
+                            
+                            <div className="bg-green-50 rounded-lg p-3 mb-3">
+                              <h5 className="font-medium text-green-900 mb-1">Test Hypothesis:</h5>
+                              <p className="text-sm text-green-800">{test.description}</p>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                              <div className="bg-gray-50 rounded-lg p-2">
+                                <span className="text-xs font-medium text-gray-900">Duration:</span>
+                                <p className="text-sm text-gray-700">{test.duration}</p>
+                              </div>
+                              <div className="bg-gray-50 rounded-lg p-2">
+                                <span className="text-xs font-medium text-gray-900">Success Metric:</span>
+                                <p className="text-sm text-gray-700">{test.metric}</p>
+                              </div>
+                            </div>
+                            
+                            {test.expectedOutcome && (
+                              <div className="bg-blue-50 rounded-lg p-3">
+                                <p className="text-xs text-blue-800">
+                                  <strong>Expected Outcome:</strong> {test.expectedOutcome}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )) : (
+                          <div className="bg-white rounded-xl p-6 border border-gray-200 text-center">
+                            <TestTube className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                            <h5 className="font-medium text-gray-900 mb-2">Need More Data</h5>
+                            <p className="text-sm text-gray-600">
+                              Post consistently for 2-3 weeks to unlock specific A/B test recommendations.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Content Gaps Detailed Analysis */}
+                  {showDetailedAnalysis && selectedMetric === 'content_gaps' && (() => {
+                    const contentGaps = analyzeContentGaps(instagramData?.recentPosts || []);
+                    const discoveryAnalysis = analyzeDiscoveryPotential(instagramData?.recentPosts || []);
+                    
+                    return (
+                      <div className="space-y-4 mb-6">
+                        <h4 className="font-semibold text-gray-900">Content Strategy Analysis</h4>
+                        
+                        {contentGaps.length > 0 ? (
+                          <>
+                            {/* Priority Gaps */}
+                            <div className="space-y-3">
+                              {contentGaps.slice(0, 3).map((gap, index) => (
+                                <div key={index} className="bg-white rounded-xl p-4 border border-gray-200">
+                                  <div className="flex items-center space-x-3 mb-3">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                      gap.priority === 'High' ? 'bg-red-100' : 
+                                      gap.priority === 'Medium' ? 'bg-yellow-100' : 'bg-blue-100'
+                                    }`}>
+                                      <span className={`text-sm font-bold ${
+                                        gap.priority === 'High' ? 'text-red-600' : 
+                                        gap.priority === 'Medium' ? 'text-yellow-600' : 'text-blue-600'
+                                      }`}>
+                                        !
+                                      </span>
+                                    </div>
+                                    <div className="flex-1">
+                                      <h5 className="font-medium text-gray-900">{gap.type}</h5>
+                                      <p className="text-sm text-gray-600">{gap.description}</p>
+                                    </div>
+                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                      gap.priority === 'High' ? 'bg-red-100 text-red-800' : 
+                                      gap.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800'
+                                    }`}>
+                                      {gap.priority}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="bg-green-50 rounded-lg p-3">
+                                    <p className="text-sm text-green-800">
+                                      <strong>Suggestion:</strong> {gap.suggestion}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Content Type Balance */}
+                            {discoveryAnalysis && (
+                              <div className="bg-white rounded-xl p-4 border border-gray-200">
+                                <div className="flex items-center space-x-2 mb-3">
+                                  <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
+                                    <BarChart3 className="w-4 h-4 text-purple-600" />
+                                  </div>
+                                  <span className="font-medium text-gray-900">Content Type Balance</span>
+                                </div>
+                                
+                                <div className="space-y-2">
+                                  {discoveryAnalysis.map((content, index) => (
+                                    <div key={content.contentType} className="flex items-center justify-between">
+                                      <span className="text-sm text-gray-700">
+                                        {content.contentType === 'VIDEO' ? '🎬' : 
+                                         content.contentType === 'CAROUSEL_ALBUM' ? '📸' : '📝'} {content.label}
+                                      </span>
+                                      <div className="flex items-center space-x-2">
+                                        <span className="text-sm text-gray-600">{content.sampleSize} posts</span>
+                                        <div className={`w-3 h-3 rounded-full ${
+                                          content.sampleSize >= 5 ? 'bg-green-500' : 
+                                          content.sampleSize >= 2 ? 'bg-yellow-500' : 'bg-red-500'
+                                        }`}></div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                                
+                                <p className="text-xs text-gray-600 mt-2">
+                                  🟢 Good variety (5+ posts) • 🟡 Some posts (2-4) • 🔴 Limited data (0-1)
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="bg-white rounded-xl p-6 border border-gray-200 text-center">
+                            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                              <span className="text-green-600 text-2xl">✓</span>
+                            </div>
+                            <h5 className="font-medium text-gray-900 mb-2">Great Content Strategy!</h5>
+                            <p className="text-sm text-gray-600">
+                              No major gaps detected. You're posting a good variety of content types consistently.
+                            </p>
+                            <div className="mt-4 bg-green-50 rounded-lg p-3">
+                              <p className="text-sm text-green-800">
+                                Keep maintaining this balanced approach across different content formats.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Conversational Follow-up */}
+                  {(selectedMetric === 'discovery' && showDetailedAnalysis) && (
+                    <div className="mt-6 space-y-4">
+                      <div className="bg-blue-50 rounded-lg p-4">
+                        <p className="text-blue-800 text-sm mb-3">
+                          <strong>Quick question:</strong> Are you comfortable creating more video content, 
+                          or would you prefer to optimize your current posting strategy first?
+                        </p>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            onClick={() => setUserPreference('more_videos')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'more_videos' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-white text-blue-700 hover:bg-blue-100'
+                            }`}
+                          >
+                            More Videos 🎬
+                          </button>
+                          <button 
+                            onClick={() => setUserPreference('optimize_current')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'optimize_current' 
+                                ? 'bg-blue-600 text-white' 
+                                : 'bg-white text-blue-700 hover:bg-blue-100'
+                            }`}
+                          >
+                            Optimize Current 📊
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Personalized Action Plan */}
+                      {userPreference && (
+                        <div className="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl p-6 text-white">
+                          <h4 className="font-bold text-lg mb-4">Your Focus This Week 🎯</h4>
+                          
+                          <div className="space-y-3">
+                            {userPreference === 'more_videos' ? (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Create 2 Reels (aim for educational/entertaining content)</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Post them Tuesday & Thursday at 7:30 PM</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: +4,680 more people reached this week</p>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Optimize posting times: use your peak hours more consistently</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Focus on content that drives profile visits</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: 15-20% increase in reach efficiency</p>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          <button 
+                            onClick={resetChat}
+                            className="w-full bg-white text-indigo-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+                          >
+                            Got It! New Analysis →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Engagement Quality Conversational Follow-up */}
+                  {(selectedMetric === 'engagement_quality' && showDetailedAnalysis) && (
+                    <div className="mt-6 space-y-4">
+                      <div className="bg-purple-50 rounded-lg p-4">
+                        <p className="text-purple-800 text-sm mb-3">
+                          <strong>Quick question:</strong> What type of content do you enjoy creating most, 
+                          or would you like to focus on improving what you already post?
+                        </p>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            onClick={() => setUserPreference('educational_content')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'educational_content' 
+                                ? 'bg-purple-600 text-white' 
+                                : 'bg-white text-purple-700 hover:bg-purple-100'
+                            }`}
+                          >
+                            Educational Content 📚
+                          </button>
+                          <button 
+                            onClick={() => setUserPreference('improve_existing')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'improve_existing' 
+                                ? 'bg-purple-600 text-white' 
+                                : 'bg-white text-purple-700 hover:bg-purple-100'
+                            }`}
+                          >
+                            Improve Current 📈
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Personalized Action Plan for Engagement */}
+                      {userPreference && (
+                        <div className="bg-gradient-to-r from-purple-500 to-pink-600 rounded-2xl p-6 text-white">
+                          <h4 className="font-bold text-lg mb-4">Your Engagement Action Plan 🎯</h4>
+                          
+                          <div className="space-y-3">
+                            {userPreference === 'educational_content' ? (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Create 2 educational posts/carousels with actionable tips</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">End each post with "Save this for later!" to boost saves</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: Save rate improvement to 5%+ within 2 weeks</p>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Add specific questions to your captions to boost comments</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Respond to all comments within 2 hours to increase engagement</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: 25% increase in comment engagement</p>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          <button 
+                            onClick={resetChat}
+                            className="w-full bg-white text-purple-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+                          >
+                            Perfect! New Analysis →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Timing Conversational Follow-up */}
+                  {(selectedMetric === 'timing' && showDetailedAnalysis) && (
+                    <div className="mt-6 space-y-4">
+                      <div className="bg-orange-50 rounded-lg p-4">
+                        <p className="text-orange-800 text-sm mb-3">
+                          <strong>Quick question:</strong> Do you prefer to schedule posts in advance, 
+                          or do you like posting in real-time when inspiration strikes?
+                        </p>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            onClick={() => setUserPreference('schedule_posts')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'schedule_posts' 
+                                ? 'bg-orange-600 text-white' 
+                                : 'bg-white text-orange-700 hover:bg-orange-100'
+                            }`}
+                          >
+                            Schedule Posts 📅
+                          </button>
+                          <button 
+                            onClick={() => setUserPreference('post_realtime')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'post_realtime' 
+                                ? 'bg-orange-600 text-white' 
+                                : 'bg-white text-orange-700 hover:bg-orange-100'
+                            }`}
+                          >
+                            Real-time Posting ⚡
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Personalized Action Plan for Timing */}
+                      {userPreference && (
+                        <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-2xl p-6 text-white">
+                          <h4 className="font-bold text-lg mb-4">Your Timing Strategy 🎯</h4>
+                          
+                          <div className="space-y-3">
+                            {userPreference === 'schedule_posts' ? (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Use Later, Buffer, or Creator Studio to schedule posts</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Schedule all posts for your top 3 time windows</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: 30% more consistent reach and engagement</p>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Set phone reminders for your top 3 optimal posting times</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">If inspiration strikes at off-peak times, save as draft</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: Better timing without losing creativity</p>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          <button 
+                            onClick={resetChat}
+                            className="w-full bg-white text-orange-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+                          >
+                            Got It! New Analysis →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* A/B Testing Conversational Follow-up */}
+                  {(selectedMetric === 'ab_testing' && showDetailedAnalysis) && (
+                    <div className="mt-6 space-y-4">
+                      <div className="bg-green-50 rounded-lg p-4">
+                        <p className="text-green-800 text-sm mb-3">
+                          <strong>Quick question:</strong> Are you ready to start testing, 
+                          or would you like me to prioritize which test to run first?
+                        </p>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            onClick={() => setUserPreference('start_testing')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'start_testing' 
+                                ? 'bg-green-600 text-white' 
+                                : 'bg-white text-green-700 hover:bg-green-100'
+                            }`}
+                          >
+                            Start Testing 🧪
+                          </button>
+                          <button 
+                            onClick={() => setUserPreference('prioritize_tests')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'prioritize_tests' 
+                                ? 'bg-green-600 text-white' 
+                                : 'bg-white text-green-700 hover:bg-green-100'
+                            }`}
+                          >
+                            Prioritize for Me 📋
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Personalized Action Plan for A/B Testing */}
+                      {userPreference && (
+                        <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl p-6 text-white">
+                          <h4 className="font-bold text-lg mb-4">Your Testing Strategy 🎯</h4>
+                          
+                          <div className="space-y-3">
+                            {userPreference === 'start_testing' ? (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Pick your highest confidence test and run it this week</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Track results daily and compare after test duration</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: Clear winner identified within 2-3 weeks</p>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Start with timing tests - easiest and highest impact</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Run only 1 test at a time for clean results</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: 15-30% improvement in your weakest area</p>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          <button 
+                            onClick={resetChat}
+                            className="w-full bg-white text-green-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+                          >
+                            Let's Do This! New Analysis →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Content Gaps Conversational Follow-up */}
+                  {(selectedMetric === 'content_gaps' && showDetailedAnalysis) && (
+                    <div className="mt-6 space-y-4">
+                      <div className="bg-yellow-50 rounded-lg p-4">
+                        <p className="text-yellow-800 text-sm mb-3">
+                          <strong>Quick question:</strong> Would you rather focus on filling content gaps, 
+                          or optimize what's already working well?
+                        </p>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            onClick={() => setUserPreference('fill_gaps')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'fill_gaps' 
+                                ? 'bg-yellow-600 text-white' 
+                                : 'bg-white text-yellow-700 hover:bg-yellow-100'
+                            }`}
+                          >
+                            Fill Gaps 🔧
+                          </button>
+                          <button 
+                            onClick={() => setUserPreference('optimize_existing')}
+                            className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+                              userPreference === 'optimize_existing' 
+                                ? 'bg-yellow-600 text-white' 
+                                : 'bg-white text-yellow-700 hover:bg-yellow-100'
+                            }`}
+                          >
+                            Optimize Current 🚀
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Personalized Action Plan for Content Gaps */}
+                      {userPreference && (
+                        <div className="bg-gradient-to-r from-yellow-500 to-orange-600 rounded-2xl p-6 text-white">
+                          <h4 className="font-bold text-lg mb-4">Your Content Strategy 🎯</h4>
+                          
+                          <div className="space-y-3">
+                            {userPreference === 'fill_gaps' ? (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Address your highest priority gap this week</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Create a content calendar to maintain balance</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: More consistent reach across content types</p>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">1</span>
+                                  </div>
+                                  <p className="text-sm">Double down on your best-performing content type</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">2</span>
+                                  </div>
+                                  <p className="text-sm">Create 2-3 variations of your top posts</p>
+                                </div>
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                                    <span className="text-sm font-bold">3</span>
+                                  </div>
+                                  <p className="text-sm">Expected: 40% increase in average post performance</p>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          <button 
+                            onClick={resetChat}
+                            className="w-full bg-white text-yellow-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+                          >
+                            Perfect Strategy! New Analysis →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Frequency Conversational Follow-up */}
+{(selectedMetric === 'frequency' && showDetailedAnalysis) && (
+  <div className="mt-6 space-y-4">
+    <div className="bg-emerald-50 rounded-lg p-4">
+      <p className="text-emerald-800 text-sm mb-3">
+        <strong>Quick question:</strong> What's your biggest challenge with posting consistently? 
+        Time management or running out of content ideas?
+      </p>
+      
+      <div className="grid grid-cols-2 gap-2">
+        <button 
+          onClick={() => setUserPreference('time_management')}
+          className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+            userPreference === 'time_management' 
+              ? 'bg-emerald-600 text-white' 
+              : 'bg-white text-emerald-700 hover:bg-emerald-100'
+          }`}
+        >
+          Time Management ⏰
+        </button>
+        <button 
+          onClick={() => setUserPreference('content_ideas')}
+          className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+            userPreference === 'content_ideas' 
+              ? 'bg-emerald-600 text-white' 
+              : 'bg-white text-emerald-700 hover:bg-emerald-100'
+          }`}
+        >
+          Content Ideas 💡
+        </button>
+      </div>
+    </div>
+
+    {/* Personalized Action Plan for Frequency */}
+    {userPreference && (
+      <div className="bg-gradient-to-r from-emerald-500 to-green-600 rounded-2xl p-6 text-white">
+        <h4 className="font-bold text-lg mb-4">Your Frequency Strategy 🎯</h4>
+        
+        <div className="space-y-3">
+          {userPreference === 'time_management' ? (
+            <>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">1</span>
+                </div>
+                <p className="text-sm">Batch create 3-4 posts every Sunday for the week ahead</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">2</span>
+                </div>
+                <p className="text-sm">Use scheduling tools (Later, Buffer) to maintain consistency</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">3</span>
+                </div>
+                <p className="text-sm">Expected: 80%+ consistency score within 2 weeks</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">1</span>
+                </div>
+                <p className="text-sm">Create a content bank with 20+ ideas you can reuse</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">2</span>
+                </div>
+                <p className="text-sm">Repurpose your best posts with new angles or formats</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">3</span>
+                </div>
+                <p className="text-sm">Expected: Never run out of content + optimal frequency achieved</p>
+              </div>
+            </>
+          )}
+        </div>
+        
+        <button 
+          onClick={resetChat}
+          className="w-full bg-white text-emerald-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+        >
+          Perfect Plan! New Analysis →
+        </button>
+      </div>
+    )}
+  </div>
+)}
+
+{/* Sentiment Conversational Follow-up */}
+{(selectedMetric === 'sentiment' && showDetailedAnalysis) && (
+  <div className="mt-6 space-y-4">
+    <div className="bg-pink-50 rounded-lg p-4">
+      <p className="text-pink-800 text-sm mb-3">
+        <strong>Quick question:</strong> Would you like to focus on increasing positive sentiment, 
+        or reducing negative reactions to your content?
+      </p>
+      
+      <div className="grid grid-cols-2 gap-2">
+        <button 
+          onClick={() => setUserPreference('increase_positive')}
+          className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+            userPreference === 'increase_positive' 
+              ? 'bg-pink-600 text-white' 
+              : 'bg-white text-pink-700 hover:bg-pink-100'
+          }`}
+        >
+          More Positive 😊
+        </button>
+        <button 
+          onClick={() => setUserPreference('reduce_negative')}
+          className={`py-2 px-3 text-sm font-medium rounded-lg transition-colors ${
+            userPreference === 'reduce_negative' 
+              ? 'bg-pink-600 text-white' 
+              : 'bg-white text-pink-700 hover:bg-pink-100'
+          }`}
+        >
+          Less Negative 🛡️
+        </button>
+      </div>
+    </div>
+
+    {userPreference && (
+      <div className="bg-gradient-to-r from-pink-500 to-rose-600 rounded-2xl p-6 text-white">
+        <h4 className="font-bold text-lg mb-4">Your Sentiment Strategy 🎯</h4>
+        
+        <div className="space-y-3">
+          {userPreference === 'increase_positive' ? (
+            <>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">1</span>
+                </div>
+                <p className="text-sm">Create more content like your best-performing type for positive reactions</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">2</span>
+                </div>
+                <p className="text-sm">Ask engaging questions that prompt enthusiastic responses</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">3</span>
+                </div>
+                <p className="text-sm">Expected: 15-20% increase in positive sentiment within 2 weeks</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">1</span>
+                </div>
+                <p className="text-sm">Avoid controversial topics and focus on universally positive themes</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">2</span>
+                </div>
+                <p className="text-sm">Moderate comments quickly and respond positively to criticism</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-sm font-bold">3</span>
+                </div>
+                <p className="text-sm">Expected: 50% reduction in negative sentiment within a month</p>
+              </div>
+            </>
+          )}
+        </div>
+        
+        <button 
+          onClick={resetChat}
+          className="w-full bg-white text-pink-600 rounded-lg py-3 font-medium mt-4 hover:bg-gray-50 transition-colors"
+        >
+          Great Strategy! New Analysis →
+        </button>
+      </div>
+    )}
+  </div>
+)}
+                  
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
