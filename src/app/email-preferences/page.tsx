@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-export default function EmailPreferencesPage() {
+// Move your existing component logic into this wrapper component
+function EmailPreferencesContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
   
@@ -41,7 +42,7 @@ export default function EmailPreferencesPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-width-md mx-auto bg-white rounded-lg shadow p-8">
+      <div className="max-w-md mx-auto bg-white rounded-lg shadow p-8">
         <h1 className="text-2xl font-bold text-gray-900 mb-6">Email Preferences</h1>
         
         <div className="space-y-4">
@@ -91,5 +92,28 @@ export default function EmailPreferencesPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// Loading component for the suspense boundary
+function EmailPreferencesLoading() {
+  return (
+    <div className="min-h-screen bg-gray-50 py-12 px-4">
+      <div className="max-w-md mx-auto bg-white rounded-lg shadow p-8">
+        <div className="text-center">
+          <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading email preferences...</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Main page component with Suspense boundary
+export default function EmailPreferencesPage() {
+  return (
+    <Suspense fallback={<EmailPreferencesLoading />}>
+      <EmailPreferencesContent />
+    </Suspense>
   );
 }
