@@ -21,6 +21,15 @@ interface UserProperties {
   [key: string]: any
 }
 
+export const ONBOARDING_EVENTS = {
+  ONBOARDING_STARTED: 'Onboarding Started',
+  ONBOARDING_STEP_COMPLETED: 'Onboarding Step Completed',
+  ONBOARDING_COMPLETED: 'Onboarding Completed',
+  ONBOARDING_SKIPPED: 'Onboarding Skipped',
+  ONBOARDING_MANUALLY_RESTARTED: 'Onboarding Manually Restarted',
+  ONBOARDING_FEATURE_COMPLETED: 'Onboarding Feature Completed'
+};
+
 class AnalyticsService {
   private mixpanel: any = null
   private supabase = createClient(

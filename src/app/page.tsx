@@ -10,6 +10,7 @@ import AccountDataManagement from '@/components/AccountDataManagement'
 import ProgressiveLoadingState from '@/components/ProgressiveLoadingState' // ✅ NEW: Import enhanced loading
 import { InstagramAccount } from '@/types/instagram'
 import { User } from '@supabase/supabase-js'
+import OnboardingWrapper from '@/components/onboarding/OnboardingWrapper'
 
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
@@ -178,6 +179,27 @@ export default function HomePage() {
             referralUrl: typeof window !== 'undefined' ? document.referrer : undefined,
             utmParams: analytics.getUtmParams()
           })
+          // ✅ NEW: Send welcome email
+if (data?.user) {
+  try {
+    await fetch('/api/send-welcome-email', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userEmail: email,
+        userName: email.split('@')[0], // Use email prefix as name for now
+        userId: data.user.id,
+      }),
+    });
+    
+    console.log('✅ Welcome email queued');
+  } catch (emailError) {
+    console.error('❌ Welcome email failed:', emailError);
+    // Don't block signup if email fails - just log the error
+  }
+}
         }
       } else {
         console.log('🔐 Starting email sign in...')
@@ -558,14 +580,24 @@ export default function HomePage() {
   }
 
   // Signed in with Instagram account - show the main dashboard
-  console.log('🎉 Showing main app - user and Instagram connected')
-  
-  // ✅ NEW: Track successful app load
-  analytics.track('App Fully Loaded', {
-    user_id: user.id,
-    instagram_username: instagramAccount.username,
-    load_time: Date.now() // You could calculate actual load time
-  }, user.id)
-  
-  return <SocialSageMobile />
+console.log('🎉 Showing main app - user and Instagram connected')
+
+// ✅ NEW: Track successful app load
+analytics.track('App Fully Loaded', {
+  user_id: user.id,
+  instagram_username: instagramAccount.username,
+  load_time: Date.now() // You could calculate actual load time
+}, user.id)
+
+return (
+  <OnboardingWrapper
+    userId={user.id}
+    userEmail={user.email || undefined}
+    instagramUsername={instagramAccount.username}
+    hasInstagramData={true}
+    analytics={analytics}
+  >
+    <SocialSageMobile />
+  </OnboardingWrapper>
+)
 }

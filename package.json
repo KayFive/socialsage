@@ -24,7 +24,8 @@
     "next": "^15.3.3",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "recharts": "^3.0.2"
+    "recharts": "^3.0.2",
+    "resend": "^4.8.0"
   },
   "devDependencies": {
     "@tsconfig/node18": "^18.2.4",

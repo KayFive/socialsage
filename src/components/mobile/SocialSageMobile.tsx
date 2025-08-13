@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Home, BarChart3, Bell, User, Plus, TrendingUp, Users, Heart, MessageCircle, Bookmark, MoreHorizontal, ChevronDown, ChevronRight, Target, Clock, Zap, TestTube, Search, BookOpen } from 'lucide-react';
+import { Home, BarChart3, Bell, User, Plus, TrendingUp, Eye, Users, Heart, MessageCircle, Bookmark, MoreHorizontal, ChevronDown, ChevronRight, Target, Clock, Zap, TestTube, Search, BookOpen, X } from 'lucide-react';
 import { AuthService } from '@/lib/auth'
 import { useAnalytics, ClickTracker, ViewTracker } from '@/components/AnalyticsProvider'
 import AccountDataManagement from '@/components/AccountDataManagement'
+import OnboardingTrigger from '@/components/onboarding/OnboardingTrigger'
 
 
 // Type definitions
@@ -158,6 +159,68 @@ interface InstagramData {
     daysUntilWeekly: number;
     daysUntilMonthly: number;
   };
+  categoryStats?: Array<{
+    content_category: string;
+    count: number;
+    avg_likes: number;
+    avg_comments: number;
+    avg_reach: number;
+    avg_impressions: number;
+  }>;
+  formatStats?: Array<{
+  post_type: string;
+  count: number;
+  avg_likes: number;
+  avg_comments: number;
+  avg_reach: number;
+  avg_impressions: number;
+  engagement_rate: string;
+  total_engagement: number;
+}>;
+  crossAnalysisStats?: Array<{
+    content_category: string;
+    post_type: string;
+    count: number;
+    avg_likes: number;
+    avg_comments: number;
+    avg_reach: number;
+    avg_impressions: number;
+  }>;
+  taggingProgress?: {
+    totalPosts: number;
+    taggedPosts: number;
+    untaggedPosts: number;
+    completionPercentage: number;
+  };
+  untaggedPosts?: Array<{
+    id: string;
+    instagram_post_id: string;
+    caption: string;
+    post_type: string;
+    published_at: string;
+    likes_count: number;
+    comments_count: number;
+    reach?: number;
+    media_url?: string;
+    thumbnail_url?: string;
+  }>;
+  availableCategories?: Array<{
+    id: string;
+    name: string;
+    emoji: string;
+    color_scheme: any;
+    is_default: boolean;
+  }>;
+  topPerformers?: {
+    category: any;
+    format: any;
+  };
+  unlockedFeatures?: {
+    basicInsights: boolean;
+    timingAnalysis: boolean;
+    crossAnalysis: boolean;
+    fullStrategy: boolean;
+  };
   // NEW: Historical data from daily_snapshots table
   historicalData?: {
     weekly: Array<{
@@ -224,18 +287,466 @@ type ValidMetric = 'growth' | 'engagement' | 'timing' | 'frequency' | 'content' 
 type PerformanceLevel = 'positive' | 'mixed' | 'negative' | 'neutral' | 'declining' | 'very_low';
 type VariationLevel = 'positive' | 'mixed' | 'negative';
 
+// ✅ ADD THE HELPER FUNCTIONS HERE ✅
+const getCategoryEmoji = (category: string) => {
+  const emojiMap: { [key: string]: string } = {
+    'Tutorial': '📚',
+    'Behind the Scenes': '🎬',
+    'Product Demo': '🛍️',
+    'Lifestyle': '✨',
+    'Tips': '💡',
+    'Story': '📖',
+    'News': '📰',
+    'Review': '⭐',
+    'Entertainment': '🎭',
+    'Educational': '🎓'
+  };
+  return emojiMap[category] || '📝';
+};
+
+const getFormatEmoji = (format: string) => {
+  const emojiMap: { [key: string]: string } = {
+    'VIDEO': '🎬',
+    'CAROUSEL_ALBUM': '📸',
+    'IMAGE': '🖼️',
+    'Reels': '🎬',
+    'Posts': '📝',
+    'Carousels': '📸'
+  };
+  return emojiMap[format] || '📄';
+};
+
+const getFormatType = (mediaType: string) => {
+  switch (mediaType) {
+    case 'VIDEO':
+      return 'Reels';
+    case 'CAROUSEL_ALBUM':
+      return 'Carousels';
+    case 'IMAGE':
+    default:
+      return 'Posts';
+  }
+};
+
+function analyzeSentiment(posts: InstagramPost[]) {
+  if (!posts || posts.length === 0) return null;
+
+  // Expanded positive keywords for social media
+  const positiveKeywords = [
+    // Basic positive words
+    'love', 'amazing', 'awesome', 'great', 'perfect', 'beautiful', 'best', 'fantastic',
+    'wonderful', 'excellent', 'incredible', 'outstanding', 'brilliant', 'superb',
+    'good', 'nice', 'cool', 'wow', 'yes', 'absolutely', 'definitely',
+    
+    // Social media slang & expressions
+    'slay', 'slaying', 'iconic', 'legend', 'queen', 'king', 'goals', 'fire', 'lit', 'vibes', 'vibe',
+    'mood', 'aesthetic', 'clean', 'fresh', 'smooth', 'crisp', 'stunning', 'gorgeous',
+    'obsessed', 'obsessing', 'stan', 'stanning', 'ship', 'shipping', 'living for this',
+    'here for it', 'here for this', 'all for it', 'so here for this',
+    
+    // Achievement & praise terms
+    'nailed it', 'killed it', 'crushed it', 'smashed it', 'ate and left no crumbs',
+    'main character', 'main character energy', 'chef kiss', 'chefs kiss', 'perfection',
+    'flawless', 'immaculate', 'divine', 'ethereal', 'dreamy',
+    
+    // Internet abbreviations & expressions  
+    'omg', 'omfg', 'lol', 'lmao', 'lmfao', 'rofl', 'tbh', 'ngl', 'fr', 'periodt', 'period',
+    'facts', 'fax', 'no cap', 'no printer', 'this is it', 'this it',
+    'based', 'valid', 'understood the assignment', 'assignment understood',
+    
+    // Excitement expressions
+    'screaming', 'crying', 'dead', 'deceased', 'gone', 'sent me', 'sending me',
+    'cannot', 'cant', 'cant even', 'i cant', 'im done', 'done for', 'finished',
+    'not me', 'not you', 'the way i', 'the way you', 'respectfully',
+    
+    // Appreciation & support
+    'appreciate', 'grateful', 'blessed', 'thankful', 'thanks', 'thank you', 'tysm',
+    'inspiring', 'inspired', 'motivating', 'motivated', 'helpful', 'needed this',
+    'came for me', 'called out', 'read me', 'understood', 'felt that', 'relate',
+    
+    // Content appreciation
+    'quality', 'content', 'educational', 'informative', 'helpful', 'useful', 'valuable',
+    'entertaining', 'funny', 'hilarious', 'comedy', 'humor', 'laugh', 'laughing',
+    'relatable', 'real', 'authentic', 'genuine', 'honest', 'raw', 'vulnerable',
+    
+    // Agreement & validation
+    'exactly', 'precisely', 'absolutely', 'totally', 'completely', 'agree', 'agreed',
+    'same', 'me too', 'also me', 'literally me', 'this me', 'big mood', 'whole mood',
+    
+    // Variations with emphasis
+    'amazinggg', 'loveee', 'yesss', 'sooo good', 'sooo cute', 'prettyyyy', 'perfecttt'
+  ];
+
+  const negativeKeywords = [
+    // Basic negative words
+    'hate', 'hating', 'terrible', 'awful', 'bad', 'worst', 'horrible', 'disappointing',
+    'annoying', 'boring', 'stupid', 'dumb', 'waste', 'useless', 'pointless',
+    'disagree', 'wrong', 'fail', 'failed', 'failure', 'disappointed', 'angry', 'mad',
+    
+    // Social media criticism & slang
+    'cringe', 'cringey', 'cringing', 'ick', 'icky', 'gross', 'disgusting', 'nasty',
+    'toxic', 'problematic', 'red flag', 'red flags', 'sus', 'suspicious', 'sketchy',
+    'weird', 'odd', 'strange', 'creepy', 'uncomfortable', 'awkward',
+    
+    // Internet negativity & dismissiveness
+    'mid', 'mid af', 'trash', 'garbage', 'flop', 'flopped', 'flopping', 'fail',
+    'ratio', 'ratioed', 'cap', 'capping', 'lying', 'lie', 'lies', 'fake',
+    'phony', 'fraud', 'scam', 'scammer', 'catfish',
+    
+    // Disappointment expressions
+    'not it', 'aint it', 'this aint it', 'miss', 'missed', 'flop era', 'fallen off',
+    'used to be', 'what happened', 'disappointed', 'let down', 'expected better',
+    
+    // Criticism & negativity
+    'overrated', 'overhyped', 'try hard', 'trying too hard', 'desperate', 'attention seeking',
+    'pick me', 'basic', 'mainstream', 'generic', 'copied', 'unoriginal',
+    'boring', 'bland', 'plain', 'meh', 'okay i guess', 'could be better',
+    
+    // Dismissive responses
+    'whatever', 'sure jan', 'okay karen', 'karen', 'boomer', 'ok boomer',
+    'delete this', 'delete', 'remove', 'take this down', 'stop', 'quit', 'enough',
+    'no one asked', 'didnt ask', 'who asked', 'nobody cares', 'dont care'
+  ];
+
+  const positiveEmojis = [
+    '😍', '🥰', '😘', '💕', '❤️', '💖', '💗', '💓', '🔥', '✨', '👏', '🙌', '💯', '👍',
+    '😊', '😀', '😃', '😄', '🤩', '😻', '💪', '🌟', '⭐', '💎', '🏆', '🎉', '🎊', '🥳'
+  ];
+
+  const negativeEmojis = [
+    '😠', '😡', '🤬', '😤', '🙄', '😒', '😞', '😢', '😭', '💔', '👎', '🤮',
+    '😷', '🤢', '😵', '😫', '😩', '😖', '😣', '😰', '😨', '🚫', '❌', '💸'
+  ];
+
+  // Analyze sentiment by content type and time
+  const sentimentByType = new Map();
+  const sentimentOverTime = new Map();
+  let totalComments = 0;
+  let totalPositive = 0;
+  let totalNegative = 0;
+  let totalNeutral = 0;
+
+  posts.forEach(post => {
+    if (!post.comments || post.comments.length === 0) return;
+
+    const contentType = post.media_type === 'VIDEO' ? 'Reels' : 
+                       post.media_type === 'CAROUSEL_ALBUM' ? 'Carousels' : 'Posts';
+    
+    const postDate = new Date(post.timestamp);
+    const monthKey = `${postDate.getFullYear()}-${String(postDate.getMonth() + 1).padStart(2, '0')}`;
+
+    if (!sentimentByType.has(contentType)) {
+      sentimentByType.set(contentType, { positive: 0, negative: 0, neutral: 0, total: 0 });
+    }
+
+    if (!sentimentOverTime.has(monthKey)) {
+      sentimentOverTime.set(monthKey, { positive: 0, negative: 0, neutral: 0, total: 0, date: postDate });
+    }
+
+    const typeData = sentimentByType.get(contentType);
+    const timeData = sentimentOverTime.get(monthKey);
+
+    post.comments.forEach(comment => {
+      const text = (comment as any).text?.toLowerCase?.() || '';
+      let sentiment = 'neutral';
+      let score = 0;
+
+      // Check for positive keywords and emojis
+      positiveKeywords.forEach(word => {
+        if (text.includes(word)) score += 1;
+      });
+      positiveEmojis.forEach(emoji => {
+        if (text.includes(emoji)) score += 1;
+      });
+
+      // Check for negative keywords and emojis
+      negativeKeywords.forEach(word => {
+        if (text.includes(word)) score -= 1;
+      });
+      negativeEmojis.forEach(emoji => {
+        if (text.includes(emoji)) score -= 1;
+      });
+
+      // Determine sentiment
+      if (score > 0) sentiment = 'positive';
+      else if (score < 0) sentiment = 'negative';
+
+      // Update counters
+      typeData[sentiment]++;
+      typeData.total++;
+      timeData[sentiment]++;
+      timeData.total++;
+      
+      if (sentiment === 'positive') totalPositive++;
+      else if (sentiment === 'negative') totalNegative++;
+      else totalNeutral++;
+      
+      totalComments++;
+    });
+  });
+
+  // Calculate overall sentiment
+  const overallSentiment = {
+    positive: totalComments > 0 ? Math.round((totalPositive / totalComments) * 100) : 0,
+    negative: totalComments > 0 ? Math.round((totalNegative / totalComments) * 100) : 0,
+    neutral: totalComments > 0 ? Math.round((totalNeutral / totalComments) * 100) : 0,
+    totalComments
+  };
+
+  // Convert to arrays and calculate insights
+  const contentTypeAnalysis = Array.from(sentimentByType.entries()).map(([type, data]) => ({
+    contentType: type,
+    positive: data.total > 0 ? Math.round((data.positive / data.total) * 100) : 0,
+    negative: data.total > 0 ? Math.round((data.negative / data.total) * 100) : 0,
+    neutral: data.total > 0 ? Math.round((data.neutral / data.total) * 100) : 0,
+    totalComments: data.total,
+    sentiment_score: data.total > 0 ? Math.round(((data.positive - data.negative) / data.total) * 100) : 0
+  })).sort((a, b) => b.sentiment_score - a.sentiment_score);
+
+  // Debug logging to track data collection
+console.log('Sentiment Analysis Debug:', {
+  totalPosts: posts.length,
+  monthsFound: Array.from(sentimentOverTime.keys()),
+  postsWithComments: posts.filter(p => p.comments && p.comments.length > 0).length
+});
+
+  const timeAnalysis = Array.from(sentimentOverTime.entries())
+    .map(([month, data]) => ({
+      month,
+      positive: data.total > 0 ? Math.round((data.positive / data.total) * 100) : 0,
+      negative: data.total > 0 ? Math.round((data.negative / data.total) * 100) : 0,
+      neutral: data.total > 0 ? Math.round((data.neutral / data.total) * 100) : 0,
+      totalComments: data.total,
+      sentiment_score: data.total > 0 ? Math.round(((data.positive - data.negative) / data.total) * 100) : 0,
+      date: data.date
+    }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .slice(-6); // Last 6 months
+
+  return {
+    overallSentiment,
+    contentTypeAnalysis,
+    timeAnalysis,
+    insights: {
+      bestContentType: contentTypeAnalysis[0]?.contentType || null,
+      sentimentTrend: timeAnalysis.length > 1 ? 
+        (timeAnalysis[timeAnalysis.length - 1].sentiment_score > timeAnalysis[timeAnalysis.length - 2].sentiment_score ? 'improving' : 'declining') : 
+        'stable',
+      averageSentimentScore: contentTypeAnalysis.length > 0 ? 
+        Math.round(contentTypeAnalysis.reduce((sum, type) => sum + type.sentiment_score, 0) / contentTypeAnalysis.length) : 0
+    }
+  };
+}
+
+const getCategorySentimentData = (instagramData: InstagramData) => {
+  if (!instagramData?.categoryStats || !instagramData?.recentPosts) {
+    return null;
+  }
+
+  // Get real sentiment analysis from actual comments
+  const sentimentData = instagramData?.recentPosts ? analyzeSentiment(instagramData.recentPosts) : null;
+  
+  if (!sentimentData || sentimentData.overallSentiment.totalComments === 0) {
+    return null;
+  }
+
+  // Map categories to their sentiment analysis
+  return instagramData.categoryStats.map((category) => {
+    // For now, we'll use the content type analysis as a proxy
+    // In a full implementation, you'd need to map posts to categories
+    const contentTypeMapping: { [key: string]: string } = {
+      'Tutorial': 'Posts',
+      'Behind the Scenes': 'Reels', 
+      'Product Demo': 'Carousels',
+      'Lifestyle': 'Posts',
+      'Tips': 'Posts',
+      'Story': 'Reels',
+      'News': 'Posts',
+      'Review': 'Carousels',
+      'Entertainment': 'Reels',
+      'Educational': 'Posts'
+    };
+    
+    const mappedType = contentTypeMapping[category.content_category] || 'Posts';
+    const contentTypeData = sentimentData.contentTypeAnalysis.find((ct: any) => ct.contentType === mappedType);
+    
+    if (contentTypeData) {
+      return {
+        category: category.content_category,
+        postCount: category.count,
+        avgEngagement: category.avg_likes + category.avg_comments,
+        sentiment_score: contentTypeData.sentiment_score,
+        positive: contentTypeData.positive,
+        negative: contentTypeData.negative,
+        neutral: contentTypeData.neutral,
+        totalComments: contentTypeData.totalComments
+      };
+    }
+    
+    // Fallback to overall sentiment if no specific mapping
+    return {
+      category: category.content_category,
+      postCount: category.count,
+      avgEngagement: category.avg_likes + category.avg_comments,
+      sentiment_score: sentimentData.insights.averageSentimentScore,
+      positive: sentimentData.overallSentiment.positive,
+      negative: sentimentData.overallSentiment.negative,
+      neutral: sentimentData.overallSentiment.neutral,
+      totalComments: Math.round(sentimentData.overallSentiment.totalComments / (instagramData.categoryStats?.length || 1))
+    };
+  }).sort((a, b) => b.sentiment_score - a.sentiment_score);
+};
+
+const EmailPreferences = ({ userId, onClose }: { userId: string, onClose: () => void }) => {
+  const [preferences, setPreferences] = useState({
+    marketing: true,
+    product: true,
+    tips: true,
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    // Load current preferences
+    const loadPreferences = async () => {
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('email_marketing_enabled, email_product_updates, email_growth_tips')
+          .eq('id', userId)
+          .single();
+
+        if (data) {
+          setPreferences({
+            marketing: data.email_marketing_enabled ?? true,
+            product: data.email_product_updates ?? true,
+            tips: data.email_growth_tips ?? true,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load email preferences:', error);
+      }
+      setLoading(false);
+    };
+
+    loadPreferences();
+  }, [userId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await supabase
+        .from('profiles')
+        .update({
+          email_marketing_enabled: preferences.marketing,
+          email_product_updates: preferences.product,
+          email_growth_tips: preferences.tips,
+        })
+        .eq('id', userId);
+      
+      onClose();
+    } catch (error) {
+      console.error('Failed to save email preferences:', error);
+      alert('Failed to save preferences. Please try again.');
+    }
+    setSaving(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="text-center">Loading...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold mb-4">Email Preferences</h2>
+        
+        <div className="space-y-4">
+          <label className="flex items-start">
+            <input
+              type="checkbox"
+              checked={preferences.marketing}
+              onChange={(e) => setPreferences(prev => ({ ...prev, marketing: e.target.checked }))}
+              className="mr-3 mt-1"
+            />
+            <div>
+              <span className="font-medium">Welcome & Growth Tips</span>
+              <p className="text-sm text-gray-600">Onboarding emails and Instagram growth strategies</p>
+            </div>
+          </label>
+          
+          <label className="flex items-start">
+            <input
+              type="checkbox"
+              checked={preferences.product}
+              onChange={(e) => setPreferences(prev => ({ ...prev, product: e.target.checked }))}
+              className="mr-3 mt-1"
+            />
+            <div>
+              <span className="font-medium">Product Updates</span>
+              <p className="text-sm text-gray-600">New features and app improvements</p>
+            </div>
+          </label>
+          
+          <label className="flex items-start">
+            <input
+              type="checkbox"
+              checked={preferences.tips}
+              onChange={(e) => setPreferences(prev => ({ ...prev, tips: e.target.checked }))}
+              className="mr-3 mt-1"
+            />
+            <div>
+              <span className="font-medium">Weekly Insights</span>
+              <p className="text-sm text-gray-600">Personalized Instagram performance insights</p>
+            </div>
+          </label>
+        </div>
+        
+        <div className="flex space-x-3 mt-6">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save Preferences'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SocialSageMobile = () => {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [user, setUser] = useState<any>(null);
   const [timeFrame, setTimeFrame] = useState<TimeFrame>('weekly');
   const [selectedMetricCategory, setSelectedMetricCategory] = useState<string | null>(null);
   const [showDataManagement, setShowDataManagement] = useState(false);
+  const [showEmailPreferences, setShowEmailPreferences] = useState(false);
   
   // Real Instagram data state
   const [instagramData, setInstagramData] = useState<InstagramData | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+
+  const [showTaggingModal, setShowTaggingModal] = useState(false);
+  const [selectedPostsForTagging, setSelectedPostsForTagging] = useState<string[]>([]);
+  const [bulkTaggingMode, setBulkTaggingMode] = useState(false);
+  const [contentView, setContentView] = useState<'categories' | 'formats' | 'cross-analysis'>('categories');
 
   // Analytics tracking
   const { trackFeature, trackEngagement, trackFunnel } = useAnalytics()
@@ -305,32 +816,59 @@ const fetchInstagramData = useCallback(async () => {
     console.log('📊 SocialSage: API Response status:', response.status);
     
     if (response.ok) {
-      const data = await response.json();
-      console.log('🔍 SocialSage: Instagram API Response:', data);
-      setInstagramData(data);
+      const rawData = await response.json();
+      console.log('🔍 SocialSage: Instagram API Response:', rawData);
+      
+      const processedData = processCategorizationData(rawData);
+      setInstagramData(processedData);
       setDataError(null);
+
+      console.log('📊 Loaded Instagram Data:', {
+        totalPosts: processedData.recentPosts?.length || 0,
+        postsWithComments: processedData.recentPosts?.filter((p: InstagramPost) => (p.comments?.length ?? 0) > 0).length || 0,
+        dateRange: {
+          earliest: processedData.recentPosts?.[processedData.recentPosts.length - 1]?.timestamp,
+          latest: processedData.recentPosts?.[0]?.timestamp
+        },
+        monthsOfData: (() => {
+          if (!processedData.recentPosts || processedData.recentPosts.length === 0) return 0;
+          const earliest = new Date(processedData.recentPosts[processedData.recentPosts.length - 1].timestamp);
+          const latest = new Date(processedData.recentPosts[0].timestamp);
+        const months = (latest.getFullYear() - earliest.getFullYear()) * 12 + (latest.getMonth() - earliest.getMonth());
+        return months;
+        })(),
+        postsByMonth: (() => {
+        if (!processedData.recentPosts) return {};
+        const monthCounts: Record<string, number> = {};
+        processedData.recentPosts.forEach((post: InstagramPost) => {
+        const month = new Date(post.timestamp).toISOString().substring(0, 7);
+        monthCounts[month] = (monthCounts[month] || 0) + 1;
+        });
+        return monthCounts;
+        })()
+      });
       
       // 🆕 NEW: Track when we last refreshed
       setLastRefreshTime(new Date());
       
       // Track successful data fetch
       trackEngagement('instagram_data_fetch_success', {
-        followers: data.followers,
-        posts_count: data.recentPosts?.length || 0,
-        engagement_rate: data.engagementRate,
-        has_insights: !!data.accountInsights
+        followers: processedData.followers,
+        posts_count: processedData.recentPosts?.length || 0,
+        engagement_rate: processedData.engagementRate,
+        has_insights: !!processedData.accountInsights
       })
       
       // Track Instagram connection status
-      if (data.followers > 0) {
+      if (processedData.followers > 0) {
         trackEngagement('instagram_connected_detected', {
-          follower_count: data.followers,
-          account_type: data.followers < 1000 ? 'micro' : data.followers < 10000 ? 'small' : 'large'
+          follower_count: processedData.followers,
+          account_type: processedData.followers < 1000 ? 'micro' : processedData.followers < 10000 ? 'small' : 'large'
         })
         
         // Complete Instagram onboarding funnel
         trackFunnel('instagram_onboarding', 'data_loaded', 3, true, {
-          followers: data.followers
+          followers: processedData.followers
         })
       }
       
@@ -358,6 +896,16 @@ const fetchInstagramData = useCallback(async () => {
   
   setIsLoadingData(false);
 }, [trackEngagement, trackFunnel]);
+
+// 🆕 NEW: Add this useEffect to get the current user
+useEffect(() => {
+  const getCurrentUser = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    setUser(user);
+  };
+  
+  getCurrentUser();
+}, []);
 
 // Simple useEffect - only fetch once on mount (NO auto-refresh!)
 useEffect(() => {
@@ -810,208 +1358,594 @@ useEffect(() => {
   };
 };
 
-function analyzeSentiment(posts: InstagramPost[]) {
-  if (!posts || posts.length === 0) return null;
+const CombinedGrowthEngagementDetailView = ({ 
+  instagramData, 
+  timeFrame, 
+  setTimeFrame, 
+  trackFeature, 
+  trackEngagement,
+  setSelectedMetricCategory 
+}: { 
+  instagramData: InstagramData, 
+  timeFrame: TimeFrame, 
+  setTimeFrame: (tf: TimeFrame) => void, 
+  trackFeature: (...args: any[]) => void, 
+  trackEngagement: (...args: any[]) => void, 
+  setSelectedMetricCategory: (cat: string | null) => void 
+}) => {
+  const [detailTimeFrame, setDetailTimeFrame] = useState('weekly');
+  
+  // Track when user enters detail view
+  useEffect(() => {
+    trackFeature('combined_growth_engagement_detail', 'view', {
+      timeframe: detailTimeFrame,
+      has_data: !!instagramData,
+      followers: instagramData?.followers || 0
+    })
+  }, [detailTimeFrame])
 
-  // Expanded positive keywords for social media
-  const positiveKeywords = [
-    // Basic positive words
-    'love', 'amazing', 'awesome', 'great', 'perfect', 'beautiful', 'best', 'fantastic',
-    'wonderful', 'excellent', 'incredible', 'outstanding', 'brilliant', 'superb',
-    'good', 'nice', 'cool', 'wow', 'yes', 'absolutely', 'definitely',
+  // Calculate absolute follower change
+  const getAbsoluteFollowerChange = () => {
+    if (!instagramData?.followers) return null;
     
-    // Social media slang & expressions
-    'slay', 'slaying', 'iconic', 'legend', 'queen', 'king', 'goals', 'fire', 'lit', 'vibes', 'vibe',
-    'mood', 'aesthetic', 'clean', 'fresh', 'smooth', 'crisp', 'stunning', 'gorgeous',
-    'obsessed', 'obsessing', 'stan', 'stanning', 'ship', 'shipping', 'living for this',
-    'here for it', 'here for this', 'all for it', 'so here for this',
-    
-    // Achievement & praise terms
-    'nailed it', 'killed it', 'crushed it', 'smashed it', 'ate and left no crumbs',
-    'main character', 'main character energy', 'chef kiss', 'chefs kiss', 'perfection',
-    'flawless', 'immaculate', 'divine', 'ethereal', 'dreamy',
-    
-    // Internet abbreviations & expressions  
-    'omg', 'omfg', 'lol', 'lmao', 'lmfao', 'rofl', 'tbh', 'ngl', 'fr', 'periodt', 'period',
-    'facts', 'fax', 'no cap', 'no printer', 'this is it', 'this it',
-    'based', 'valid', 'understood the assignment', 'assignment understood',
-    
-    // Excitement expressions
-    'screaming', 'crying', 'dead', 'deceased', 'gone', 'sent me', 'sending me',
-    'cannot', 'cant', 'cant even', 'i cant', 'im done', 'done for', 'finished',
-    'not me', 'not you', 'the way i', 'the way you', 'respectfully',
-    
-    // Appreciation & support
-    'appreciate', 'grateful', 'blessed', 'thankful', 'thanks', 'thank you', 'tysm',
-    'inspiring', 'inspired', 'motivating', 'motivated', 'helpful', 'needed this',
-    'came for me', 'called out', 'read me', 'understood', 'felt that', 'relate',
-    
-    // Content appreciation
-    'quality', 'content', 'educational', 'informative', 'helpful', 'useful', 'valuable',
-    'entertaining', 'funny', 'hilarious', 'comedy', 'humor', 'laugh', 'laughing',
-    'relatable', 'real', 'authentic', 'genuine', 'honest', 'raw', 'vulnerable',
-    
-    // Agreement & validation
-    'exactly', 'precisely', 'absolutely', 'totally', 'completely', 'agree', 'agreed',
-    'same', 'me too', 'also me', 'literally me', 'this me', 'big mood', 'whole mood',
-    
-    // Variations with emphasis
-    'amazinggg', 'loveee', 'yesss', 'sooo good', 'sooo cute', 'prettyyyy', 'perfecttt'
-  ];
-
-  const negativeKeywords = [
-    // Basic negative words
-    'hate', 'hating', 'terrible', 'awful', 'bad', 'worst', 'horrible', 'disappointing',
-    'annoying', 'boring', 'stupid', 'dumb', 'waste', 'useless', 'pointless',
-    'disagree', 'wrong', 'fail', 'failed', 'failure', 'disappointed', 'angry', 'mad',
-    
-    // Social media criticism & slang
-    'cringe', 'cringey', 'cringing', 'ick', 'icky', 'gross', 'disgusting', 'nasty',
-    'toxic', 'problematic', 'red flag', 'red flags', 'sus', 'suspicious', 'sketchy',
-    'weird', 'odd', 'strange', 'creepy', 'uncomfortable', 'awkward',
-    
-    // Internet negativity & dismissiveness
-    'mid', 'mid af', 'trash', 'garbage', 'flop', 'flopped', 'flopping', 'fail',
-    'ratio', 'ratioed', 'cap', 'capping', 'lying', 'lie', 'lies', 'fake',
-    'phony', 'fraud', 'scam', 'scammer', 'catfish',
-    
-    // Disappointment expressions
-    'not it', 'aint it', 'this aint it', 'miss', 'missed', 'flop era', 'fallen off',
-    'used to be', 'what happened', 'disappointed', 'let down', 'expected better',
-    
-    // Criticism & negativity
-    'overrated', 'overhyped', 'try hard', 'trying too hard', 'desperate', 'attention seeking',
-    'pick me', 'basic', 'mainstream', 'generic', 'copied', 'unoriginal',
-    'boring', 'bland', 'plain', 'meh', 'okay i guess', 'could be better',
-    
-    // Dismissive responses
-    'whatever', 'sure jan', 'okay karen', 'karen', 'boomer', 'ok boomer',
-    'delete this', 'delete', 'remove', 'take this down', 'stop', 'quit', 'enough',
-    'no one asked', 'didnt ask', 'who asked', 'nobody cares', 'dont care'
-  ];
-
-  const positiveEmojis = [
-    '😍', '🥰', '😘', '💕', '❤️', '💖', '💗', '💓', '🔥', '✨', '👏', '🙌', '💯', '👍',
-    '😊', '😀', '😃', '😄', '🤩', '😻', '💪', '🌟', '⭐', '💎', '🏆', '🎉', '🎊', '🥳'
-  ];
-
-  const negativeEmojis = [
-    '😠', '😡', '🤬', '😤', '🙄', '😒', '😞', '😢', '😭', '💔', '👎', '🤮',
-    '😷', '🤢', '😵', '😫', '😩', '😖', '😣', '😰', '😨', '🚫', '❌', '💸'
-  ];
-
-  // Analyze sentiment by content type and time
-  const sentimentByType = new Map();
-  const sentimentOverTime = new Map();
-  let totalComments = 0;
-  let totalPositive = 0;
-  let totalNegative = 0;
-  let totalNeutral = 0;
-
-  posts.forEach(post => {
-    if (!post.comments || post.comments.length === 0) return;
-
-    const contentType = post.media_type === 'VIDEO' ? 'Reels' : 
-                       post.media_type === 'CAROUSEL_ALBUM' ? 'Carousels' : 'Posts';
-    
-    const postDate = new Date(post.timestamp);
-    const monthKey = `${postDate.getFullYear()}-${String(postDate.getMonth() + 1).padStart(2, '0')}`;
-
-    if (!sentimentByType.has(contentType)) {
-      sentimentByType.set(contentType, { positive: 0, negative: 0, neutral: 0, total: 0 });
+    if (detailTimeFrame === 'weekly' && instagramData?.growthData?.canCalculateWeekly && instagramData.growthRate) {
+      const growthPercent = parseFloat(instagramData.growthRate.replace('+', '').replace('%', ''));
+      const absoluteChange = Math.round((growthPercent / 100) * instagramData.followers);
+      return {
+        change: absoluteChange,
+        isPositive: absoluteChange >= 0,
+        formatted: absoluteChange >= 0 ? `+${absoluteChange.toLocaleString()}` : absoluteChange.toLocaleString()
+      };
+    } else if (detailTimeFrame === 'monthly' && instagramData?.growthData?.canCalculateMonthly && instagramData.monthlyGrowth) {
+      const growthPercent = parseFloat(instagramData.monthlyGrowth.replace('+', '').replace('%', ''));
+      const absoluteChange = Math.round((growthPercent / 100) * instagramData.followers);
+      return {
+        change: absoluteChange,
+        isPositive: absoluteChange >= 0,
+        formatted: absoluteChange >= 0 ? `+${absoluteChange.toLocaleString()}` : absoluteChange.toLocaleString()
+      };
     }
-
-    if (!sentimentOverTime.has(monthKey)) {
-      sentimentOverTime.set(monthKey, { positive: 0, negative: 0, neutral: 0, total: 0, date: postDate });
-    }
-
-    const typeData = sentimentByType.get(contentType);
-    const timeData = sentimentOverTime.get(monthKey);
-
-    post.comments.forEach(comment => {
-      const text = (comment as any).text?.toLowerCase?.() || '';
-      let sentiment = 'neutral';
-      let score = 0;
-
-      // Check for positive keywords and emojis
-      positiveKeywords.forEach(word => {
-        if (text.includes(word)) score += 1;
-      });
-      positiveEmojis.forEach(emoji => {
-        if (text.includes(emoji)) score += 1;
-      });
-
-      // Check for negative keywords and emojis
-      negativeKeywords.forEach(word => {
-        if (text.includes(word)) score -= 1;
-      });
-      negativeEmojis.forEach(emoji => {
-        if (text.includes(emoji)) score -= 1;
-      });
-
-      // Determine sentiment
-      if (score > 0) sentiment = 'positive';
-      else if (score < 0) sentiment = 'negative';
-
-      // Update counters
-      typeData[sentiment]++;
-      typeData.total++;
-      timeData[sentiment]++;
-      timeData.total++;
-      
-      if (sentiment === 'positive') totalPositive++;
-      else if (sentiment === 'negative') totalNegative++;
-      else totalNeutral++;
-      
-      totalComments++;
-    });
-  });
-
-  // Calculate overall sentiment
-  const overallSentiment = {
-    positive: totalComments > 0 ? Math.round((totalPositive / totalComments) * 100) : 0,
-    negative: totalComments > 0 ? Math.round((totalNegative / totalComments) * 100) : 0,
-    neutral: totalComments > 0 ? Math.round((totalNeutral / totalComments) * 100) : 0,
-    totalComments
+    
+    return null;
   };
 
-  // Convert to arrays and calculate insights
-  const contentTypeAnalysis = Array.from(sentimentByType.entries()).map(([type, data]) => ({
-    contentType: type,
-    positive: data.total > 0 ? Math.round((data.positive / data.total) * 100) : 0,
-    negative: data.total > 0 ? Math.round((data.negative / data.total) * 100) : 0,
-    neutral: data.total > 0 ? Math.round((data.neutral / data.total) * 100) : 0,
-    totalComments: data.total,
-    sentiment_score: data.total > 0 ? Math.round(((data.positive - data.negative) / data.total) * 100) : 0
-  })).sort((a, b) => b.sentiment_score - a.sentiment_score);
+  // Get current metrics based on timeframe
+const getCurrentMetrics = () => {
+  if (!instagramData) return null;
+  
+  const now = new Date();
+  const daysBack = detailTimeFrame === 'weekly' ? 7 : 30;
+  const cutoffDate = new Date(now.getTime() - (daysBack * 24 * 60 * 60 * 1000));
 
-  const timeAnalysis = Array.from(sentimentOverTime.entries())
-    .map(([month, data]) => ({
-      month,
-      positive: data.total > 0 ? Math.round((data.positive / data.total) * 100) : 0,
-      negative: data.total > 0 ? Math.round((data.negative / data.total) * 100) : 0,
-      neutral: data.total > 0 ? Math.round((data.neutral / data.total) * 100) : 0,
-      totalComments: data.total,
-      sentiment_score: data.total > 0 ? Math.round(((data.positive - data.negative) / data.total) * 100) : 0,
-      date: data.date
-    }))
-    .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(-6); // Last 6 months
+  // Filter posts within the timeframe for engagement calculation
+  const timeframePosts = instagramData.recentPosts?.filter(post => {
+    const postDate = new Date(post.timestamp);
+    return postDate >= cutoffDate;
+  }) || [];
+
+  // If no posts in timeframe, return zeros/dashes
+  if (timeframePosts.length === 0) {
+    return {
+      engagementRate: '--',
+      avgLikes: 0,
+      avgComments: 0,
+      avgReach: 0,
+      avgImpressions: 0,
+      postsInTimeframe: 0
+    };
+  }
+
+  // Calculate ALL metrics from timeframe-specific posts
+  const totalLikes = timeframePosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
+  const totalComments = timeframePosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
+  const totalReach = timeframePosts.reduce((sum, post) => sum + (post.reach || 0), 0);
+  const totalImpressions = timeframePosts.reduce((sum, post) => sum + (post.impressions || 0), 0);
+  const totalEngagement = totalLikes + totalComments;
+
+  // Calculate averages from timeframe posts
+  const avgLikes = Math.round(totalLikes / timeframePosts.length);
+  const avgComments = Math.round(totalComments / timeframePosts.length);
+  const avgReach = Math.round(totalReach / timeframePosts.length);
+  const avgImpressions = Math.round(totalImpressions / timeframePosts.length);
+
+  // Calculate engagement rate from timeframe posts
+  let timeframeEngagementRate = '--';
+  if (totalReach > 0) {
+    const rate = (totalEngagement / totalReach) * 100;
+    timeframeEngagementRate = `${rate.toFixed(1)}%`;
+  } else if (instagramData.followers > 0) {
+    // Fallback to follower-based calculation
+    const avgFollowersReached = instagramData.followers * timeframePosts.length;
+    const rate = (totalEngagement / avgFollowersReached) * 100;
+    timeframeEngagementRate = `${rate.toFixed(1)}%`;
+  }
 
   return {
-    overallSentiment,
-    contentTypeAnalysis,
-    timeAnalysis,
-    insights: {
-      bestContentType: contentTypeAnalysis[0]?.contentType || null,
-      sentimentTrend: timeAnalysis.length > 1 ? 
-        (timeAnalysis[timeAnalysis.length - 1].sentiment_score > timeAnalysis[timeAnalysis.length - 2].sentiment_score ? 'improving' : 'declining') : 
-        'stable',
-      averageSentimentScore: contentTypeAnalysis.length > 0 ? 
-        Math.round(contentTypeAnalysis.reduce((sum, type) => sum + type.sentiment_score, 0) / contentTypeAnalysis.length) : 0
-    }
+    engagementRate: timeframeEngagementRate,
+    avgLikes,
+    avgComments, 
+    avgReach,
+    avgImpressions,
+    postsInTimeframe: timeframePosts.length
   };
-}
+};
+
+  // Generate chart data from real historical data
+const generateChartData = () => {
+  if (!instagramData?.historicalData) return { followerData: [], engagementData: [] };
+  
+  const historicalData = detailTimeFrame === 'weekly' 
+    ? instagramData.historicalData.weekly 
+    : instagramData.historicalData.monthly;
+  
+  if (!historicalData || historicalData.length === 0) return { followerData: [], engagementData: [] };
+
+  // Process follower data with proper formatting
+  const followerData = historicalData.map((dataPoint, index) => {
+    const isCurrentPeriod = !dataPoint.isComplete;
+    let label = '';
+    
+    if (detailTimeFrame === 'weekly') {
+      // For weekly: show just the start date like "12/15"
+      const weekStartDate = new Date(dataPoint.date);
+      const startMonth = weekStartDate.getMonth() + 1; // +1 because getMonth() is 0-indexed
+      const startDay = weekStartDate.getDate();
+      
+      label = `${startMonth}/${startDay}`;
+    } else {
+      // For monthly: show abbreviated month name like "Dec", "Jan"
+      const [year, month] = dataPoint.date.split('-');
+      const monthDate = new Date(parseInt(year), parseInt(month) - 1, 1);
+      label = monthDate.toLocaleDateString('en-US', { month: 'short' });
+    }
+    
+    return {
+      label,
+      followers: dataPoint.followers,
+      isCurrentPeriod,
+      date: dataPoint.date
+    };
+  });
+
+  // Calculate REAL engagement data from posts in those periods
+  const engagementData = followerData.map((followerItem) => {
+    let engagementRate = 0;
+    
+    if (instagramData.recentPosts && instagramData.recentPosts.length > 0) {
+      let periodPosts: any[] = [];
+      
+      if (detailTimeFrame === 'weekly') {
+        // Filter posts for this specific week
+        const weekStartDate = new Date(followerItem.date);
+        const weekEndDate = new Date(weekStartDate);
+        weekEndDate.setDate(weekStartDate.getDate() + 6);
+        weekEndDate.setHours(23, 59, 59, 999); // End of day
+        
+        periodPosts = instagramData.recentPosts.filter(post => {
+          const postDate = new Date(post.timestamp);
+          return postDate >= weekStartDate && postDate <= weekEndDate;
+        });
+      } else {
+        // Filter posts for this specific month
+        const [year, month] = followerItem.date.split('-');
+        const monthStart = new Date(parseInt(year), parseInt(month) - 1, 1);
+        const monthEnd = new Date(parseInt(year), parseInt(month), 0); // Last day of month
+        monthEnd.setHours(23, 59, 59, 999); // End of day
+        
+        periodPosts = instagramData.recentPosts.filter(post => {
+          const postDate = new Date(post.timestamp);
+          return postDate >= monthStart && postDate <= monthEnd;
+        });
+      }
+      
+      // Calculate engagement rate for this period
+      if (periodPosts.length > 0) {
+        const totalLikes = periodPosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
+        const totalComments = periodPosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
+        const totalReach = periodPosts.reduce((sum, post) => sum + (post.reach || 0), 0);
+        const totalEngagement = totalLikes + totalComments;
+        
+        if (totalReach > 0) {
+          engagementRate = (totalEngagement / totalReach) * 100;
+        } else if (followerItem.followers > 0) {
+          // Fallback to follower-based calculation
+          const avgFollowersReached = followerItem.followers * periodPosts.length;
+          engagementRate = (totalEngagement / avgFollowersReached) * 100;
+        }
+      } else {
+        // No posts in this period, try to estimate from nearby periods or use 0
+        engagementRate = 0;
+      }
+    }
+    
+    return {
+      ...followerItem,
+      engagementRate: parseFloat(engagementRate.toFixed(1)),
+      postsInPeriod: instagramData.recentPosts ? instagramData.recentPosts.filter(post => {
+        if (detailTimeFrame === 'weekly') {
+          const weekStartDate = new Date(followerItem.date);
+          const weekEndDate = new Date(weekStartDate);
+          weekEndDate.setDate(weekStartDate.getDate() + 6);
+          weekEndDate.setHours(23, 59, 59, 999);
+          const postDate = new Date(post.timestamp);
+          return postDate >= weekStartDate && postDate <= weekEndDate;
+        } else {
+          const [year, month] = followerItem.date.split('-');
+          const monthStart = new Date(parseInt(year), parseInt(month) - 1, 1);
+          const monthEnd = new Date(parseInt(year), parseInt(month), 0);
+          monthEnd.setHours(23, 59, 59, 999);
+          const postDate = new Date(post.timestamp);
+          return postDate >= monthStart && postDate <= monthEnd;
+        }
+      }).length : 0
+    };
+  });
+
+  return { followerData, engagementData };
+};
+
+  const { followerData, engagementData } = generateChartData();
+  const absoluteChange = getAbsoluteFollowerChange();
+  const currentMetrics = getCurrentMetrics();
+  
+  const maxFollowers = Math.max(...followerData.map(d => d.followers));
+  const maxEngagement = Math.max(...engagementData.map(d => d.engagementRate));
+
+  return (
+    <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-emerald-50 to-blue-50">
+      {/* Header */}
+      <div className="bg-white/95 backdrop-blur-sm border-b border-emerald-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
+        <ClickTracker
+          featureName="combined_growth_engagement_back"
+          metadata={{ timeframe: detailTimeFrame }}
+        >
+          <button 
+            onClick={() => setSelectedMetricCategory(null)}
+            className="mr-3 text-emerald-600 font-medium"
+          >
+            ← Back
+          </button>
+        </ClickTracker>
+        <div className="flex items-center">
+          <span className="mr-2">📈</span>
+          <h1 className="text-xl font-bold text-gray-900">Growth & Engagement</h1>
+        </div>
+      </div>
+
+      <div className="p-4">
+        {/* Overview */}
+        <div className="bg-gradient-to-br from-emerald-100 to-blue-100 border-emerald-200 rounded-2xl p-4 mb-6 shadow-sm border">
+          <h2 className="text-lg font-bold text-gray-900 mb-2">Account Performance Overview</h2>
+          <p className="text-emerald-800 text-sm">
+            Your combined growth and engagement metrics over time.
+          </p>
+        </div>
+
+        {/* Timeframe Toggle */}
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+          <div className="flex bg-emerald-50 rounded-xl p-1 border border-emerald-200">
+            {[
+              { key: 'weekly', label: 'Weekly' },
+              { key: 'monthly', label: 'Monthly' }
+            ].map((period) => (
+              <ClickTracker
+                key={period.key}
+                featureName="combined_detail_timeframe_toggle"
+                metadata={{ selected_timeframe: period.key }}
+              >
+                <button
+                  onClick={() => {
+                    setDetailTimeFrame(period.key);
+                    trackFeature('combined_detail_timeframe_change', 'click', {
+                      new_timeframe: period.key,
+                      previous_timeframe: detailTimeFrame
+                    });
+                  }}
+                  className={`flex-1 py-2 px-4 text-sm font-medium rounded-lg transition-all ${
+                    detailTimeFrame === period.key
+                      ? 'bg-white text-emerald-700 shadow-sm border border-emerald-300'
+                      : 'text-emerald-600 hover:text-emerald-700'
+                  }`}
+                >
+                  {period.label}
+                </button>
+              </ClickTracker>
+            ))}
+          </div>
+        </div>
+
+        {/* Current Performance Metrics */}
+        <ViewTracker
+          featureName="combined_current_performance"
+          metadata={{
+            timeframe: detailTimeFrame,
+            has_growth_data: detailTimeFrame === 'weekly' ? instagramData?.growthData?.canCalculateWeekly : instagramData?.growthData?.canCalculateMonthly,
+            followers: instagramData?.followers || 0
+          }}
+        >
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+            <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+              <span className="mr-2">🎯</span>
+              Current Performance
+            </h3>
+            
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="text-center bg-emerald-50 rounded-xl p-4">
+                <div className="text-2xl font-bold text-emerald-600 mb-1">
+                  {detailTimeFrame === 'weekly' ? (
+                    instagramData?.growthData?.canCalculateWeekly ? (
+                      absoluteChange?.formatted || '--'
+                    ) : '--'
+                  ) : (
+                    instagramData?.growthData?.canCalculateMonthly ? (
+                      absoluteChange?.formatted || '--'
+                    ) : '--'
+                  )}
+                </div>
+                <div className="text-sm text-emerald-700">Follower Change</div>
+                <div className="text-xs text-gray-600 mt-1">
+                  {detailTimeFrame === 'weekly' ? (
+                    instagramData?.growthData?.canCalculateWeekly ? 
+                      `${instagramData.growthRate} this week` : 
+                      `Available in ${instagramData?.growthData?.daysUntilWeekly || 7}d`
+                  ) : (
+                    instagramData?.growthData?.canCalculateMonthly ? 
+                      `${instagramData.monthlyGrowth} this month` : 
+                      `Available in ${instagramData?.growthData?.daysUntilMonthly || 30}d`
+                  )}
+                </div>
+              </div>
+              
+              <div className="text-center bg-blue-50 rounded-xl p-4">
+                <div className="text-2xl font-bold text-blue-600 mb-1">
+                  {currentMetrics?.engagementRate || '--'}
+                </div>
+                <div className="text-sm text-blue-700">Engagement Rate</div>
+                <div className="text-xs text-gray-600 mt-1">
+                  Last {detailTimeFrame === 'weekly' ? '7' : '30'} days
+                  {currentMetrics?.postsInTimeframe ? ` (${currentMetrics.postsInTimeframe} posts)` : ''}
+                </div>
+              </div>
+            </div>
+
+            {/* Complete Engagement Breakdown */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/60 rounded-lg p-3 text-center border border-gray-200/50">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <Heart className="w-4 h-4 text-red-500" />
+                  <span className="text-sm font-semibold text-gray-900">{currentMetrics?.avgLikes || 0}</span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Likes per Post</div>
+              </div>
+              
+              <div className="bg-white/60 rounded-lg p-3 text-center border border-gray-200/50">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <MessageCircle className="w-4 h-4 text-blue-500" />
+                  <span className="text-sm font-semibold text-gray-900">{currentMetrics?.avgComments || 0}</span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Comments per Post</div>
+              </div>
+              
+              <div className="bg-white/60 rounded-lg p-3 text-center border border-gray-200/50">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <TrendingUp className="w-4 h-4 text-green-500" />
+                  <span className="text-sm font-semibold text-gray-900">
+                    {(currentMetrics?.avgReach ?? 0) >= 1000 ? `${((currentMetrics?.avgReach ?? 0) / 1000).toFixed(1)}K` : (currentMetrics?.avgReach ?? 0)}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Reach per Post</div>
+              </div>
+              
+              <div className="bg-white/60 rounded-lg p-3 text-center border border-gray-200/50">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <div className="w-4 h-4 bg-purple-500 rounded flex items-center justify-center">
+                    <span className="text-white text-xs">👁</span>
+                  </div>
+                  <span className="text-sm font-semibold text-gray-900">
+                    {(currentMetrics?.avgImpressions ?? 0) >= 1000 ? `${((currentMetrics?.avgImpressions ?? 0) / 1000).toFixed(1)}K` : (currentMetrics?.avgImpressions ?? 0)}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Impressions per Post</div>
+              </div>
+              
+              {instagramData?.accountInsights && (
+                <>
+                  <div className="bg-white/60 rounded-lg p-3 text-center border border-gray-200/50">
+                    <div className="flex items-center justify-center space-x-1 mb-1">
+                      <Users className="w-4 h-4 text-indigo-500" />
+                      <span className="text-sm font-semibold text-gray-900">
+                        {instagramData.accountInsights.profile_visits >= 1000 ? 
+                          `${(instagramData.accountInsights.profile_visits / 1000).toFixed(1)}K` : 
+                          instagramData.accountInsights.profile_visits.toLocaleString()
+                        }
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-600">Profile Visits (30d)</div>
+                  </div>
+                  
+                  <div className="bg-white/60 rounded-lg p-3 text-center border border-gray-200/50">
+                    <div className="flex items-center justify-center space-x-1 mb-1">
+                      <Target className="w-4 h-4 text-emerald-500" />
+                      <span className="text-sm font-semibold text-gray-900">
+                        {instagramData.accountInsights.reach >= 1000 ? 
+                          `${(instagramData.accountInsights.reach / 1000).toFixed(1)}K` : 
+                          instagramData.accountInsights.reach.toLocaleString()
+                        }
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-600">Total Reach (30d)</div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </ViewTracker>
+
+        {/* Charts */}
+        {followerData.length > 0 && (
+          <>
+            {/* Follower Growth Chart */}
+            <ViewTracker
+              featureName="combined_follower_chart"
+              metadata={{
+                timeframe: detailTimeFrame,
+                data_points: followerData.length
+              }}
+            >
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">📈</span>
+                  Follower Growth Trend
+                </h3>
+                
+                <div className="relative">
+                  <div className="flex items-end justify-between h-32 mb-3">
+                    {followerData.map((dataPoint, index) => {
+                      const height = maxFollowers > 0 ? (dataPoint.followers / maxFollowers) * 100 : 0;
+                      
+                      return (
+                        <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/followerData.length}%` }}>
+                          <div className="text-xs font-bold text-gray-900 mb-1">
+                            {dataPoint.followers >= 1000 ? 
+                              `${(dataPoint.followers / 1000).toFixed(1)}K` : 
+                              dataPoint.followers.toLocaleString()
+                            }
+                          </div>
+                          
+                          <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '100px' }}>
+                            <div 
+                              className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
+                                dataPoint.isCurrentPeriod 
+                                  ? 'bg-gradient-to-t from-emerald-400 to-emerald-600' 
+                                  : 'bg-gradient-to-t from-emerald-300 to-emerald-500'
+                              }`}
+                              style={{ height: `${Math.max(height, 8)}%` }}
+                            />
+                            {dataPoint.isCurrentPeriod && (
+                              <div className="absolute bottom-0 w-full bg-gradient-to-t from-emerald-400 to-emerald-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  <div className="flex justify-between border-t border-gray-200 pt-2">
+                    {followerData.map((dataPoint, index) => (
+                      <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/followerData.length}%` }}>
+                        {dataPoint.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </ViewTracker>
+
+            {/* Engagement Rate Chart */}
+            <ViewTracker
+              featureName="combined_engagement_chart"
+              metadata={{
+                timeframe: detailTimeFrame,
+                data_points: engagementData.length
+              }}
+            >
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                  <span className="mr-2">💬</span>
+                  Engagement Rate Trend
+                </h3>
+                
+                <div className="relative">
+                  <div className="flex items-end justify-between h-32 mb-3">
+                    {engagementData.map((dataPoint, index) => {
+                      const height = maxEngagement > 0 ? (dataPoint.engagementRate / maxEngagement) * 100 : 0;
+                      
+                      return (
+                        <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/engagementData.length}%` }}>
+                          <div className="text-xs font-bold text-gray-900 mb-1">
+                            {dataPoint.engagementRate}%
+                          </div>
+                          
+                          <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '100px' }}>
+                            <div 
+                              className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
+                                dataPoint.isCurrentPeriod 
+                                  ? 'bg-gradient-to-t from-blue-400 to-blue-600' 
+                                  : 'bg-gradient-to-t from-blue-300 to-blue-500'
+                              }`}
+                              style={{ height: `${Math.max(height, 8)}%` }}
+                            />
+                            {dataPoint.isCurrentPeriod && (
+                              <div className="absolute bottom-0 w-full bg-gradient-to-t from-blue-400 to-blue-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  <div className="flex justify-between border-t border-gray-200 pt-2">
+                    {engagementData.map((dataPoint, index) => (
+                      <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/engagementData.length}%` }}>
+                        {dataPoint.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </ViewTracker>
+          </>
+        )}
+
+        {/* Growth-Engagement Insights */}
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+          <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+            <span className="mr-2">🔗</span>
+            Account Performance Insights
+          </h3>
+          
+          <div className="space-y-3">
+            {/* Growth-Engagement Correlation */}
+            <div className="bg-gradient-to-r from-emerald-50 to-blue-50 rounded-lg p-3 border border-emerald-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-gray-900">Growth-Engagement Correlation</span>
+                <span className="text-emerald-600 font-bold">
+                  {currentMetrics && parseFloat(currentMetrics.engagementRate?.replace('%', '') || '0') > 4 ? 'Strong ↗' : 'Moderate ↗'}
+                </span>
+              </div>
+              <p className="text-xs text-gray-700">
+                Your {currentMetrics?.engagementRate || '--'} engagement rate is {
+                  parseFloat(currentMetrics?.engagementRate?.replace('%', '') || '0') > 4 ? 'above' : 'at'
+                } the typical Instagram average of 3-4%.
+              </p>
+            </div>
+
+            {/* Data Collection Status */}
+            <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-3 border border-purple-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-gray-900">Data Collection Status</span>
+                <span className="text-purple-600 font-bold">
+                  {instagramData?.growthData?.daysOfData || 0} days
+                </span>
+              </div>
+              <p className="text-xs text-gray-700">
+                {instagramData?.growthData?.canCalculateWeekly ? 
+                  'Weekly growth rates available' : 
+                  `Weekly rates available in ${instagramData?.growthData?.daysUntilWeekly || 7} days`
+                } • {instagramData?.growthData?.canCalculateMonthly ? 
+                  'Monthly growth rates available' : 
+                  `Monthly rates available in ${instagramData?.growthData?.daysUntilMonthly || 30} days`
+                }
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 
   // Helper function to truncate caption
   const truncateCaption = (caption: string, maxLength: number = 50) => {
@@ -1053,6 +1987,101 @@ function analyzeSentiment(posts: InstagramPost[]) {
     if (likes >= avgLikes * 0.8) return 'medium';
     return 'low';
   };
+
+  const handleTagPosts = async (postIds: string[], category: string, isCustom = false) => {
+  try {
+    console.log('🏷️ Tagging posts:', postIds, 'with category:', category);
+
+    const response = await fetch('/api/instagram/metrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'tag',
+        postIds,
+        category,
+        isCustomCategory: isCustom
+      })
+    });
+
+    // Read the response ONCE
+    const result = await response.json();
+    console.log('🔍 Complete server response:', JSON.stringify(result, null, 2));
+
+    if (response.ok && result.success) {
+      // Close modal and reset state
+      setShowTaggingModal(false);
+      setSelectedPostsForTagging([]);
+      setBulkTaggingMode(false);
+      
+      // Track successful tagging
+      trackEngagement('posts_tagged', {
+        post_count: postIds.length,
+        category,
+        is_custom: isCustom
+      });
+
+      console.log('✅ Posts tagged successfully');
+      
+      // Refresh data to show updates
+      await fetchInstagramData();
+    } else {
+      console.error('❌ Failed to tag posts:', result);
+      alert(`Failed to tag posts: ${result.error || 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error('Failed to tag posts:', error);
+    alert('Network error while tagging posts');
+  }
+};
+
+  const handleUntagPosts = async (postIds: string[]) => {
+    try {
+      const response = await fetch('/api/instagram/metrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'untag',
+          postIds
+        })
+      });
+
+      if (response.ok) {
+        await fetchInstagramData();
+      }
+    } catch (error) {
+      console.error('Failed to untag posts:', error);
+    }
+  };
+
+  const formatNumber = (num: number) => {
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return Math.round(num).toString();
+  };
+
+  const getFormatName = (format: string) => {
+    switch (format) {
+      case 'VIDEO': return 'Reels';
+      case 'CAROUSEL_ALBUM': return 'Carousels';
+      case 'IMAGE': return 'Posts';
+      default: return format;
+    }
+  };
+
+  const getFormatEmoji = (format: string) => {
+    switch (format) {
+      case 'VIDEO': return '🎬';
+      case 'CAROUSEL_ALBUM': return '📸';
+      case 'IMAGE': return '📝';
+      default: return '📱';
+    }
+  };
+
+  // Process categorization data - now handled server-side
+const processCategorizationData = (data: any) => {
+  console.log(`📊 Tagging progress: ${data.taggingProgress?.taggedPosts || 0}/${data.taggingProgress?.totalPosts || 0} posts tagged`);
+  return data;
+};
 
   // ===== ENHANCED ANALYTICS FUNCTIONS =====
 
@@ -1345,168 +2374,243 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
 };
 
   // Generate metric categories with real data
-  const getMetricCategories = (): MetricCategory[] => {
-    // Calculate timing and frequency data
-    const timingData = instagramData?.recentPosts ? calculateTimingOptimization(instagramData.recentPosts) : null;
-    const frequencyData = instagramData?.recentPosts ? calculateFrequencyOptimization(instagramData.recentPosts) : null;
+const getMetricCategories = (): MetricCategory[] => {
+  // Calculate timing and frequency data
+  const timingData = instagramData?.recentPosts ? calculateTimingOptimization(instagramData.recentPosts) : null;
+  const frequencyData = instagramData?.recentPosts ? calculateFrequencyOptimization(instagramData.recentPosts) : null;
 
-    const baseCategories = [
-      {
-        id: 'growth',
-        title: 'Follower Growth',
-        emoji: '🚀',
-        description: 'See how your community is growing',
-        color: 'from-green-400 to-emerald-500',
-        metrics: [
-          { 
-            name: 'Total Followers', 
-            value: instagramData?.followers?.toLocaleString() || '0', 
-            trend: 'neutral' as 'neutral'
-          },
-          { 
-            name: 'Weekly Growth Rate', 
-            value: instagramData?.growthData?.canCalculateWeekly ? 
+  const baseCategories = [
+    {
+      id: 'growth_engagement', // CHANGED: Combined ID
+      title: 'Growth & Engagement',
+      emoji: '📈',
+      description: 'Track follower growth and audience engagement together',
+      color: 'from-emerald-400 to-blue-500',
+      metrics: [
+        { 
+          name: 'Total Followers', 
+          value: instagramData?.followers?.toLocaleString() || '0', 
+          trend: 'neutral' as 'neutral'
+        },
+        { 
+          name: timeFrame === 'weekly' ? 'Weekly Growth' : 'Monthly Growth', 
+          value: timeFrame === 'weekly' ? 
+            (instagramData?.growthData?.canCalculateWeekly ? 
               (instagramData.growthRate || '0%') : 
-              `Available in ${instagramData?.growthData?.daysUntilWeekly || 7}d`, 
-            trend: instagramData?.growthData?.canCalculateWeekly ? 'up' as 'up' : 'neutral' as 'neutral'
-          },
-          { 
-            name: 'Monthly Growth Rate', 
-            value: instagramData?.growthData?.canCalculateMonthly ? 
+              `Available in ${instagramData?.growthData?.daysUntilWeekly || 7}d`) :
+            (instagramData?.growthData?.canCalculateMonthly ? 
               (instagramData.monthlyGrowth || '0%') : 
-              `Available in ${instagramData?.growthData?.daysUntilMonthly || 30}d`, 
-            trend: instagramData?.growthData?.canCalculateMonthly ? 'up' as 'up' : 'neutral' as 'neutral'
-          }
+              `Available in ${instagramData?.growthData?.daysUntilMonthly || 30}d`), 
+          trend: (timeFrame === 'weekly' ? instagramData?.growthData?.canCalculateWeekly : instagramData?.growthData?.canCalculateMonthly) ? 'up' as 'up' : 'neutral' as 'neutral'
+        },
+        { 
+          name: 'Engagement Rate', 
+          value: instagramData?.engagementRate || '4.2%', 
+          trend: 'up' as 'up' 
+        },
+        { 
+          name: 'Avg Reach per Post', 
+          value: instagramData?.avgReach ? instagramData.avgReach.toLocaleString() : '1.2K', 
+          trend: 'up' as 'up' 
+        }
+      ]
+    },
+    {
+      id: 'timing',
+      title: 'Timing Optimization',
+      emoji: '⏰',
+      description: 'Discover when to post for maximum engagement',
+      color: 'from-purple-400 to-pink-500',
+      metrics: [
+        { 
+          name: 'Best Time to Post', 
+          value: timingData?.timeSlots[0]?.time || '7-9 PM', 
+          detail: timingData?.timeSlots[0] ? `${timingData.timeSlots[0].avgLikes} avg likes` : 'Weekdays peak engagement window',
+          trend: 'up' as 'up'
+        },
+        { 
+          name: 'Top Performance Hour', 
+          value: timingData?.timeSlots[0] ? `${timingData.timeSlots[0].engagementScore} score` : '85% activity', 
+          detail: timingData?.timeSlots[0] ? `Based on ${timingData.timeSlots[0].postCount} posts` : 'Peak audience activity',
+          trend: 'up' as 'up'
+        },
+        { 
+          name: 'Active Time Slots', 
+          value: timingData?.timeSlots ? `${timingData.timeSlots.length} slots` : '12 slots tested', 
+          detail: timingData ? `From ${instagramData?.recentPosts?.length} posts analyzed` : 'Time periods with posts',
+          trend: 'up' as 'up'
+        }
+      ]
+    },
+    {
+      id: 'frequency',
+      title: 'Frequency Optimization',
+      emoji: '📊',
+      description: 'How often to post for optimal growth',
+      color: 'from-orange-400 to-red-500',
+      metrics: [
+        { 
+          name: 'Current Frequency', 
+          value: frequencyData ? `${frequencyData.currentFrequency}/week` : '2.5/week', 
+          detail: 'Based on recent posting pattern',
+          trend: 'neutral' as 'neutral'
+        },
+        { 
+          name: 'Optimal Frequency', 
+          value: frequencyData ? `${frequencyData.optimalFrequency}/week` : '3.5/week', 
+          detail: 'For maximum engagement',
+          trend: 'up' as 'up'
+        },
+        { 
+          name: 'Consistency Score', 
+          value: frequencyData ? `${frequencyData.consistencyScore}%` : '78%', 
+          detail: 'How regularly you post',
+          trend: (frequencyData?.consistencyScore || 78) >= 70 ? 'up' as 'up' : 'down' as 'down'
+        },
+        { 
+          name: 'Best Frequency Range', 
+          value: frequencyData?.performanceByFrequency[0]?.range || '2-3 posts/week', 
+          detail: frequencyData?.performanceByFrequency[0] ? `${frequencyData.performanceByFrequency[0].avgEngagement} avg engagement` : 'Highest performing range',
+          trend: 'up' as 'up'
+        }
+      ]
+    },
+    {
+      id: 'content_categories',
+      title: 'Content Categories',
+      emoji: '🏷️',
+      description: 'Manual post tagging and cross-analysis insights',
+      color: 'from-indigo-400 to-purple-500',
+      metrics: [
+        {
+          name: 'Tagged Posts',
+          value: instagramData?.taggingProgress?.taggedPosts?.toString() || '0',
+          trend: 'neutral' as 'neutral',
+          detail: `${instagramData?.taggingProgress?.untaggedPosts || 0} remaining`
+        },
+        {
+          name: 'Categories',
+          value: instagramData?.categoryStats?.length?.toString() || '0',
+          trend: 'neutral' as 'neutral',
+          detail: 'Content types identified'
+        },
+        {
+          name: 'Progress',
+          value: instagramData?.taggingProgress?.completionPercentage 
+            ? `${instagramData.taggingProgress.completionPercentage}%` 
+            : '0%',
+          trend: (instagramData?.taggingProgress?.taggedPosts || 0) > 0 ? 'up' as 'up' : 'neutral' as 'neutral',
+          detail: instagramData?.topPerformers?.category
+            ? `${instagramData.topPerformers.category.content_category} leads`
+            : 'Tag posts for insights'
+        }
+      ]
+    },
+    {
+      id: 'insights',
+      title: 'Top Followers',
+      emoji: '👥',
+      description: 'Your most engaged followers by interaction',
+      color: 'from-violet-400 to-purple-500',
+      metrics: instagramData?.topFollowers && instagramData.topFollowers.length > 0 ? 
+        instagramData.topFollowers.slice(0, 5).map((follower) => ({
+          name: `@${follower.username}`,
+          value: `${follower.interactions} interactions`,
+          trend: 'up' as 'up'
+        })) :
+        [
+          { name: 'No Engagement Data', value: 'Connect account', trend: 'neutral' as 'neutral' }
         ]
+    },
+    {
+      id: 'sentiment_analysis',
+      title: 'Audience Sentiment',
+      emoji: '💭',
+      description: 'Understand how your audience feels about your content',
+      color: 'from-pink-400 to-rose-500',
+      metrics: (() => {
+  const sentimentData = instagramData?.recentPosts ? analyzeSentiment(instagramData.recentPosts) : null;
+  const hasTaggedCategories = instagramData?.categoryStats && instagramData.categoryStats.length > 0;
+  
+  if (sentimentData && sentimentData.overallSentiment.totalComments > 0) {
+    const categoryAnalysis = hasTaggedCategories ? getCategorySentimentData(instagramData) : null;
+    const bestCategory = categoryAnalysis?.[0];
+    const avgSentimentScore = categoryAnalysis ? 
+      categoryAnalysis.reduce((sum, cat) => sum + cat.sentiment_score, 0) / categoryAnalysis.length : 
+      sentimentData.insights.averageSentimentScore;
+    
+    // Calculate trend from time analysis
+    const trendDirection = sentimentData.insights.sentimentTrend;
+    const trendEmoji = trendDirection === 'improving' ? '📈' : 
+                     trendDirection === 'declining' ? '📉' : '➡️';
+    
+    return [
+      {
+        name: 'Overall Sentiment',
+        value: `${sentimentData.overallSentiment.positive}%`,
+        trend: sentimentData.overallSentiment.positive > 70 ? 'up' as 'up' : 
+               sentimentData.overallSentiment.positive > 50 ? 'neutral' as 'neutral' : 'down' as 'down',
+        detail: `${sentimentData.overallSentiment.totalComments} real comments analyzed`
       },
       {
-        id: 'engagement',
-        title: 'Audience Engagement',
-        emoji: '💬',
-        description: 'See how much your audience loves your content',
-        color: 'from-blue-400 to-purple-500',
-        metrics: [
-          { 
-            name: 'Engagement Rate', 
-            value: instagramData?.engagementRate || '4.2%', 
-            trend: 'up' as 'up' 
-          },
-          { 
-            name: 'Avg Likes per Post', 
-            value: instagramData?.avgLikes?.toString() || '342', 
-            trend: 'up' as 'up' 
-          },
-          { 
-            name: 'Avg Comments per Post', 
-            value: instagramData?.avgComments?.toString() || '18.5', 
-            trend: 'up' as 'up' 
-          },
-          { 
-            name: 'Avg Reach per Post', 
-            value: instagramData?.avgReach ? instagramData.avgReach.toLocaleString() : '1.2K', 
-            trend: 'up' as 'up' 
-          },
-          { 
-            name: 'Avg Impressions per Post', 
-            value: instagramData?.avgImpressions ? instagramData.avgImpressions.toLocaleString() : '2.3K', 
-            trend: 'up' as 'up' 
-          }
-        ]
+        name: 'Sentiment Score',
+        value: `${avgSentimentScore > 0 ? '+' : ''}${Math.round(avgSentimentScore)}`,
+        trend: avgSentimentScore > 20 ? 'up' as 'up' : 
+               avgSentimentScore > 0 ? 'neutral' as 'neutral' : 'down' as 'down',
+        detail: hasTaggedCategories ? 'Across all categories' : 'Overall score'
       },
       {
-        id: 'timing',
-        title: 'Timing Optimization',
-        emoji: '⏰',
-        description: 'Discover when to post for maximum engagement',
-        color: 'from-purple-400 to-pink-500',
-        metrics: [
-          { 
-            name: 'Best Time to Post', 
-            value: timingData?.timeSlots[0]?.time || '7-9 PM', 
-            detail: timingData?.timeSlots[0] ? `${timingData.timeSlots[0].avgLikes} avg likes` : 'Weekdays peak engagement window',
-            trend: 'up' as 'up'
-          },
-          { 
-            name: 'Top Performance Hour', 
-            value: timingData?.timeSlots[0] ? `${timingData.timeSlots[0].engagementScore} score` : '85% activity', 
-            detail: timingData?.timeSlots[0] ? `Based on ${timingData.timeSlots[0].postCount} posts` : 'Peak audience activity',
-            trend: 'up' as 'up'
-          },
-          { 
-            name: 'Active Time Slots', 
-            value: timingData?.timeSlots ? `${timingData.timeSlots.length} slots` : '12 slots tested', 
-            detail: timingData ? `From ${instagramData?.recentPosts?.length} posts analyzed` : 'Time periods with posts',
-            trend: 'up' as 'up'
-          }
-        ]
+        name: 'Trend Analysis',
+        value: `${trendEmoji} ${trendDirection}`,
+        trend: trendDirection === 'improving' ? 'up' as 'up' : 
+               trendDirection === 'declining' ? 'down' as 'down' : 'neutral' as 'neutral',
+        detail: sentimentData.timeAnalysis.length > 1 ? 
+                `${sentimentData.timeAnalysis.length} months analyzed` : 
+                'Need more time data'
       },
       {
-        id: 'frequency',
-        title: 'Frequency Optimization',
-        emoji: '📈',
-        description: 'How often to post for optimal growth',
-        color: 'from-orange-400 to-red-500',
-        metrics: [
-          { 
-            name: 'Current Frequency', 
-            value: frequencyData ? `${frequencyData.currentFrequency}/week` : '2.5/week', 
-            detail: 'Based on recent posting pattern',
-            trend: 'neutral' as 'neutral'
-          },
-          { 
-            name: 'Optimal Frequency', 
-            value: frequencyData ? `${frequencyData.optimalFrequency}/week` : '3.5/week', 
-            detail: 'For maximum engagement',
-            trend: 'up' as 'up'
-          },
-          { 
-            name: 'Consistency Score', 
-            value: frequencyData ? `${frequencyData.consistencyScore}%` : '78%', 
-            detail: 'How regularly you post',
-            trend: (frequencyData?.consistencyScore || 78) >= 70 ? 'up' as 'up' : 'down' as 'down'
-          },
-          { 
-            name: 'Best Frequency Range', 
-            value: frequencyData?.performanceByFrequency[0]?.range || '2-3 posts/week', 
-            detail: frequencyData?.performanceByFrequency[0] ? `${frequencyData.performanceByFrequency[0].avgEngagement} avg engagement` : 'Highest performing range',
-            trend: 'up' as 'up'
-          }
-        ]
-      },
-      {
-        id: 'content',
-        title: 'Content Analysis',
-        emoji: '📊',
-        description: 'Performance by format and content themes',
-        color: 'from-teal-400 to-cyan-500',
-        metrics: instagramData?.recentPosts && instagramData.recentPosts.length > 0 ? [
-          { name: 'Content Types', value: `${new Set(instagramData.recentPosts.map(p => p.media_type)).size} types`, trend: 'neutral' as 'neutral' },
-          { name: 'Total Posts', value: instagramData.recentPosts.length.toString(), trend: 'neutral' as 'neutral' },
-          { name: 'Avg Engagement', value: Math.round((instagramData.avgLikes || 0) + (instagramData.avgComments || 0)).toString(), trend: 'up' as 'up' }
-        ] : [
-          { name: 'No Content Data', value: 'Connect account', trend: 'neutral' as 'neutral' }
-        ]
-      },
-      {
-        id: 'insights',
-        title: 'Top Followers',
-        emoji: '👥',
-        description: 'Your most engaged followers by interaction',
-        color: 'from-violet-400 to-purple-500',
-        metrics: instagramData?.topFollowers && instagramData.topFollowers.length > 0 ? 
-          instagramData.topFollowers.slice(0, 5).map((follower) => ({
-            name: `@${follower.username}`,
-            value: `${follower.interactions} interactions`,
-            trend: 'up' as 'up'
-          })) :
-          [
-            { name: 'No Engagement Data', value: 'Connect account', trend: 'neutral' as 'neutral' }
-          ]
+        name: hasTaggedCategories ? 'Best Category' : 'Best Content Type',
+        value: bestCategory?.category || sentimentData.insights.bestContentType || 'Mixed content',
+        trend: 'up' as 'up',
+        detail: bestCategory ? 
+                `${bestCategory.sentiment_score} sentiment score` : 
+                'Most positive reactions'
       }
     ];
+  } else {
+    return [
+      {
+        name: 'Comments Needed',
+        value: 'No data yet',
+        trend: 'neutral' as 'neutral',
+        detail: 'Post content that encourages comments'
+      },
+      {
+        name: 'Real Analysis',
+        value: 'Coming soon',
+        trend: 'neutral' as 'neutral',
+        detail: 'Based on actual comment text'
+      },
+      {
+        name: 'Historical Trends',
+        value: 'Available',
+        trend: 'neutral' as 'neutral',
+        detail: 'Once you have comment data'
+      },
+      {
+        name: 'Category Insights',
+        value: hasTaggedCategories ? 'Ready' : 'Tag posts',
+        trend: 'neutral' as 'neutral',
+        detail: hasTaggedCategories ? 'Categories tagged' : 'Tag posts to unlock'
+      }
+    ];
+  }
+})()
+    }
+  ];
 
-    return baseCategories;
-  };
+  return baseCategories;
+};
 
   const metricCategories = useMemo(() => getMetricCategories(), [
   instagramData?.followers,
@@ -1528,19 +2632,27 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
     })
     
     // Track specific analytics features
-    if (categoryId === 'timing') {
-      trackEngagement('timing_optimization_accessed', {
-        posts_available: instagramData?.recentPosts?.length || 0
-      })
-    } else if (categoryId === 'frequency') {
-      trackEngagement('frequency_optimization_accessed', {
-        posts_available: instagramData?.recentPosts?.length || 0
-      })
-    } else if (categoryId === 'content') {
-      trackEngagement('content_analysis_accessed', {
-        posts_available: instagramData?.recentPosts?.length || 0
-      })
-    }
+if (categoryId === 'growth_engagement') {
+  trackEngagement('combined_growth_engagement_accessed', {
+    has_growth_data: timeFrame === 'weekly' ? 
+      instagramData?.growthData?.canCalculateWeekly : 
+      instagramData?.growthData?.canCalculateMonthly,
+    engagement_rate: instagramData?.engagementRate,
+    followers: instagramData?.followers || 0
+  })
+} else if (categoryId === 'timing') {
+  trackEngagement('timing_optimization_accessed', {
+    posts_available: instagramData?.recentPosts?.length || 0
+  })
+} else if (categoryId === 'frequency') {
+  trackEngagement('frequency_optimization_accessed', {
+    posts_available: instagramData?.recentPosts?.length || 0
+  })
+} else if (categoryId === 'content') {
+  trackEngagement('content_analysis_accessed', {
+    posts_available: instagramData?.recentPosts?.length || 0
+  })
+}
   }
 
   // Track tab navigation with analytics  
@@ -1581,6 +2693,21 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
         }
       }
     }, [category.id])
+
+    // NEW: Handle combined growth & engagement view
+if (category.id === 'growth_engagement') {
+  if (!instagramData) return null;
+  return (
+    <CombinedGrowthEngagementDetailView
+      instagramData={instagramData}
+      timeFrame={timeFrame}
+      setTimeFrame={setTimeFrame}
+      trackFeature={trackFeature}
+      trackEngagement={trackEngagement}
+      setSelectedMetricCategory={setSelectedMetricCategory}
+    />
+  );
+}
 
     if (category.id === 'content') {
       // Calculate content type performance from real data
@@ -2298,791 +3425,666 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
       );
     }
 
-    // Enhanced metric detail view for Growth and Engagement categories
-    if (category.id === 'growth') {
-      const [growthTimeFrame, setGrowthTimeFrame] = useState<'weekly' | 'monthly'>('weekly');
-      
-      // Track growth timeframe changes
-      const handleGrowthTimeFrameChange = (newTimeFrame: 'weekly' | 'monthly') => {
-        setGrowthTimeFrame(newTimeFrame)
-        trackFeature('growth_timeframe_change', 'click', {
-          new_timeframe: newTimeFrame,
-          previous_timeframe: growthTimeFrame
-        })
-      }
-      
-      // Get the appropriate growth data based on selected timeframe
-      const getCurrentGrowthData = () => {
-        if (growthTimeFrame === 'weekly') {
-          return {
-            rate: instagramData?.growthData?.canCalculateWeekly ? instagramData.growthRate : null,
-            canCalculate: instagramData?.growthData?.canCalculateWeekly || false,
-            daysUntil: instagramData?.growthData?.daysUntilWeekly || 7,
-            label: 'Weekly Growth',
-            period: 'past 7 days'
-          };
-        } else {
-          return {
-            rate: instagramData?.growthData?.canCalculateMonthly ? instagramData.monthlyGrowth : null,
-            canCalculate: instagramData?.growthData?.canCalculateMonthly || false,
-            daysUntil: instagramData?.growthData?.daysUntilMonthly || 30,
-            label: 'Monthly Growth',
-            period: 'past 30 days'
-          };
-        }
-      };
+    if (category.id === 'content_categories') {
+    return (
+      <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-indigo-50 to-purple-50">
+        {/* Header */}
+        <div className="bg-white/95 backdrop-blur-sm border-b border-indigo-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
+          <button 
+            onClick={() => setSelectedMetricCategory(null)}
+            className="mr-3 text-indigo-600 font-medium"
+          >
+            ← Back
+          </button>
+          <div className="flex items-center">
+            <span className="mr-2">🏷️</span>
+            <h1 className="text-xl font-bold text-gray-900">Content Categories</h1>
+          </div>
+        </div>
 
-      const growthData = getCurrentGrowthData();
+        <div className="p-4">
+          {/* Progress Overview */}
+          <div className="bg-gradient-to-br from-indigo-100 to-purple-100 border-indigo-200 rounded-2xl p-4 mb-6 shadow-sm border">
+            <h2 className="text-lg font-bold text-gray-900 mb-2">Content Strategy Analysis</h2>
+            
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-indigo-800 text-sm">
+                {instagramData?.taggingProgress?.taggedPosts || 0} of {instagramData?.taggingProgress?.totalPosts || 0} posts tagged
+              </span>
+              <span className="text-indigo-700 font-bold">
+                {instagramData?.taggingProgress?.completionPercentage || 0}%
+              </span>
+            </div>
+            <div className="w-full bg-indigo-200 rounded-full h-3 mb-4">
+              <div 
+                className="bg-gradient-to-r from-indigo-500 to-purple-600 h-3 rounded-full transition-all duration-1000"
+                style={{ width: `${instagramData?.taggingProgress?.completionPercentage || 0}%` }}
+              ></div>
+            </div>
 
-      const getTimeframeSpecificTotalMetrics = () => {
-  // Only show account-level metrics for monthly view
-  if (growthTimeFrame !== 'monthly') {
-    return null;
-  }
-  
-  // Use account-level insights (30-day data)
-  if (instagramData?.accountInsights) {
-    return {
-      totalReach: instagramData.accountInsights.reach || 0,
-      totalProfileVisits: instagramData.accountInsights.profile_visits || 0,
-      totalImpressions: instagramData.accountInsights.impressions || 0,
-      postsCount: instagramData?.recentPosts?.filter(post => {
-        const postDate = new Date(post.timestamp);
-        const thirtyDaysAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000));
-        return postDate >= thirtyDaysAgo;
-      }).length || 0,
-      isAccountLevel: true,
-      timeframeDays: 30
-    };
-  }
-
-  // No account insights available
-  return {
-    totalReach: 0,
-    totalProfileVisits: 0,
-    totalImpressions: 0,
-    postsCount: 0,
-    isAccountLevel: false
-  };
-};
-
-      // Calculate absolute follower change
-      const getAbsoluteFollowerChange = () => {
-        if (!instagramData?.followers) return null;
-        
-        if (growthTimeFrame === 'weekly' && instagramData?.growthData?.canCalculateWeekly && instagramData.growthRate) {
-          const growthPercent = parseFloat(instagramData.growthRate.replace('+', '').replace('%', ''));
-          const absoluteChange = Math.round((growthPercent / 100) * instagramData.followers);
-          return {
-            change: absoluteChange,
-            isPositive: absoluteChange >= 0,
-            formatted: absoluteChange >= 0 ? `+${absoluteChange.toLocaleString()}` : absoluteChange.toLocaleString()
-          };
-        } else if (growthTimeFrame === 'monthly' && instagramData?.growthData?.canCalculateMonthly && instagramData.monthlyGrowth) {
-          const growthPercent = parseFloat(instagramData.monthlyGrowth.replace('+', '').replace('%', ''));
-          const absoluteChange = Math.round((growthPercent / 100) * instagramData.followers);
-          return {
-            change: absoluteChange,
-            isPositive: absoluteChange >= 0,
-            formatted: absoluteChange >= 0 ? `+${absoluteChange.toLocaleString()}` : absoluteChange.toLocaleString()
-          };
-        }
-        
-        return null;
-      };
-
-      const absoluteChange = getAbsoluteFollowerChange();
-
-      // Generate chart data from real historical data when available
-      const generateChartData = () => {
-        if (!instagramData?.followers) return [];
-        
-        // Use real historical data if available
-        if (instagramData.historicalData) {
-          if (growthTimeFrame === 'weekly' && instagramData.historicalData.weekly.length > 0) {
-            return instagramData.historicalData.weekly.map((dataPoint, index) => {
-              const date = new Date(dataPoint.date);
-              const weekStart = new Date(date);
-              weekStart.setDate(date.getDate() - 6); // Start of the week (Monday)
-              
-              const isCurrentWeek = !dataPoint.isComplete;
-              const weekLabel = isCurrentWeek ? 'This Week' : 
-                `${weekStart.getMonth() + 1}/${weekStart.getDate()}`;
-              
-              return {
-                label: weekLabel,
-                followers: dataPoint.followers,
-                isCurrentPeriod: isCurrentWeek,
-                date: dataPoint.date
-              };
-            });
-          } else if (growthTimeFrame === 'monthly' && instagramData.historicalData.monthly.length > 0) {
-  return instagramData.historicalData.monthly.map((dataPoint, index) => {
-    // FIXED: Parse the year-month string directly without Date object
-    const [year, month] = dataPoint.date.split('-');
-    const monthNumber = parseInt(month, 10); // 06 becomes 6, 07 becomes 7
-    
-    const isCurrentMonth = !dataPoint.isComplete;
-    
-    // FIXED: Create month label directly from month number
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthLabel = monthNames[monthNumber - 1]; // monthNumber is 1-based, array is 0-based
-    
-    return {
-      label: monthLabel,
-      followers: dataPoint.followers,
-      isCurrentPeriod: isCurrentMonth,
-      date: dataPoint.date
-    };
-  });
-}
-        }
-        
-        // Only return empty array if no real data available - no fake/estimated data
-        return [];
-      };
-
-      const chartData = generateChartData();
-      const maxFollowers = Math.max(...chartData.map(d => d.followers));
-
-      return (
-        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-emerald-50 to-teal-50">
-          <div className="bg-white/95 backdrop-blur-sm border-b border-emerald-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
-            <ClickTracker
-              featureName="growth_metrics_back"
-              metadata={{ timeframe: growthTimeFrame }}
-            >
-              <button 
-                onClick={() => setSelectedMetricCategory(null)}
-                className="mr-3 text-emerald-600 font-medium"
-              >
-                ← Back
-              </button>
-            </ClickTracker>
-            <div className="flex items-center">
-              <span className="mr-2">🚀</span>
-              <h1 className="text-xl font-bold text-gray-900">Growth Metrics</h1>
+            {/* Feature Unlocks */}
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { name: 'Basic Insights', unlock: 5, unlocked: instagramData?.unlockedFeatures?.basicInsights },
+                { name: 'Timing Analysis', unlock: 15, unlocked: instagramData?.unlockedFeatures?.timingAnalysis },
+                { name: 'Cross-Analysis', unlock: 25, unlocked: instagramData?.unlockedFeatures?.crossAnalysis },
+                { name: 'Full Strategy', unlock: 100, unlocked: instagramData?.unlockedFeatures?.fullStrategy }
+              ].map((feature) => (
+                <div key={feature.name} className={`p-2 rounded-lg text-xs ${
+                  feature.unlocked 
+                    ? 'bg-green-100 text-green-700 border border-green-200' 
+                    : 'bg-gray-100 text-gray-600 border border-gray-200'
+                }`}>
+                  <div className="flex items-center space-x-1">
+                    <span>{feature.unlocked ? '✅' : '🔒'}</span>
+                    <span className="font-medium">{feature.name}</span>
+                  </div>
+                  <div className="text-xs opacity-75">
+                    {feature.unlock === 100 ? 'All posts' : `${feature.unlock} posts`}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="p-4">
-            <div className="bg-gradient-to-br from-emerald-100 to-teal-100 border-emerald-200 rounded-2xl p-4 mb-6 shadow-sm border">
-              <h2 className="text-lg font-bold text-gray-900 mb-2">Follower Growth Analysis</h2>
-              <p className="text-emerald-800 text-sm">
-                {instagramData?.growthData?.daysOfData ? 
-                  `${instagramData.growthData.daysOfData} days of data collected since ${instagramData.growthData.dataAvailableSince}` :
-                  'Connect your account and wait for data collection to see growth rates.'
-                }
-              </p>
+          {/* Three Analysis Views Toggle */}
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+            <div className="flex bg-indigo-50 rounded-xl p-1 border border-indigo-200">
+              {[
+                { key: 'categories' as const, label: 'By Topic', count: instagramData?.categoryStats?.length || 0 },
+                { key: 'formats' as const, label: 'By Format', count: instagramData?.formatStats?.length || 0 },
+                { key: 'cross-analysis' as const, label: 'Cross Analysis', count: instagramData?.crossAnalysisStats?.length || 0 }
+              ].map((view) => (
+                <button
+                  key={view.key}
+                  onClick={() => setContentView(view.key)}
+                  className={`flex-1 py-2 px-3 text-xs font-medium rounded-lg transition-all ${
+                    contentView === view.key
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-indigo-600 hover:text-indigo-700'
+                  }`}
+                >
+                  <div>{view.label}</div>
+                  <div className="text-xs opacity-75">({view.count})</div>
+                </button>
+              ))}
             </div>
+          </div>
 
-            {/* Weekly/Monthly Toggle */}
+          {/* Category Performance View */}
+          {contentView === 'categories' && (
             <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-              <div className="flex bg-emerald-50 rounded-xl p-1 border border-emerald-200">
-                {[
-                  { key: 'weekly' as const, label: 'Weekly' },
-                  { key: 'monthly' as const, label: 'Monthly' }
-                ].map((period) => (
-                  <ClickTracker
-                    key={period.key}
-                    featureName="growth_timeframe_toggle"
-                    metadata={{
-                      selected_timeframe: period.key,
-                      has_data: growthData.canCalculate
-                    }}
-                  >
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="mr-2">📊</span>
+                Performance by Topic ({instagramData?.categoryStats?.length || 0} categories)
+              </h3>
+              {instagramData?.categoryStats && instagramData.categoryStats.length > 0 ? (
+                <div className="space-y-4">
+                  {instagramData.categoryStats.map((category, index) => (
+                    <div key={category.content_category} className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
+                            <span className="text-white text-xs font-bold">#{index + 1}</span>
+                          </div>
+                          <div>
+                            <span className="font-semibold text-gray-900">{category.content_category}</span>
+                            <p className="text-xs text-gray-600">{category.count} posts</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-bold text-blue-700">
+                            {formatNumber(category.avg_likes + category.avg_comments)} eng/post
+                          </div>
+                          <div className="text-xs text-gray-600">avg engagement</div>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <Heart className="w-4 h-4 text-red-500" />
+                            <span className="font-bold text-gray-900">{formatNumber(category.avg_likes)}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Likes</div>
+                        </div>
+                        
+                        <div className="text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <MessageCircle className="w-4 h-4 text-blue-500" />
+                            <span className="font-bold text-gray-900">{formatNumber(category.avg_comments)}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Comments</div>
+                        </div>
+                        
+                        <div className="text-center">
+                          <div className="flex items-center justify-center space-x-1 mb-1">
+                            <TrendingUp className="w-4 h-4 text-green-500" />
+                            <span className="font-bold text-gray-900">{formatNumber(category.avg_reach || 0)}</span>
+                          </div>
+                          <div className="text-xs text-gray-600">Avg Reach</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center p-6">
+                  <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-2xl">📊</span>
+                  </div>
+                  <h3 className="font-semibold text-gray-900 mb-2">No Category Data Yet</h3>
+                  <p className="text-gray-600 text-sm">Tag at least 5 posts to see category performance insights.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Format Performance View - Always works without tagging */}
+{contentView === 'formats' && (
+  <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+    <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+      <span className="mr-2">📱</span>
+      Performance by Post Format ({instagramData?.formatStats?.length || 0} formats)
+    </h3>
+    
+    {instagramData?.formatStats && instagramData.formatStats.length > 0 ? (
+      <div className="space-y-4">
+        {instagramData.formatStats.map((format, index) => {
+          // Configuration for different format types
+          const formatConfig = {
+            'Reels': { 
+              emoji: '🎬', 
+              color: 'from-purple-500 to-pink-500', 
+              bgColor: 'from-purple-50 to-pink-50', 
+              borderColor: 'border-purple-200' 
+            },
+            'Carousels': { 
+              emoji: '📸', 
+              color: 'from-blue-500 to-indigo-500', 
+              bgColor: 'from-blue-50 to-indigo-50', 
+              borderColor: 'border-blue-200' 
+            },
+            'Post': { 
+              emoji: '📝', 
+              color: 'from-green-500 to-emerald-500', 
+              bgColor: 'from-green-50 to-emerald-50', 
+              borderColor: 'border-green-200' 
+            }
+          };
+
+          const config = formatConfig[format.post_type as keyof typeof formatConfig] || {
+            emoji: '📱',
+            color: 'from-gray-500 to-gray-600',
+            bgColor: 'from-gray-50 to-gray-100',
+            borderColor: 'border-gray-200'
+          };
+
+          return (
+            <div key={format.post_type} className={`bg-gradient-to-br ${config.bgColor} ${config.borderColor} rounded-2xl p-4 shadow-sm border`}>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center space-x-3">
+                  <div className="w-12 h-12 bg-gradient-to-br from-gray-700 to-gray-800 rounded-full flex items-center justify-center">
+                    <span className="text-white text-sm font-bold">#{index + 1}</span>
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-2xl">{config.emoji}</span>
+                      <span className="text-lg font-bold text-gray-900">{format.post_type}</span>
+                    </div>
+                    <div className="text-sm text-gray-600">{format.count} posts analyzed</div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className={`text-xl font-bold bg-gradient-to-r ${config.color} bg-clip-text text-transparent`}>
+                    {format.engagement_rate}
+                  </div>
+                  <div className="text-xs text-gray-600">Engagement Rate</div>
+                </div>
+              </div>
+              
+              {/* Metrics Grid - Same as old implementation */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                  <div className="flex items-center justify-center space-x-1 mb-1">
+                    <Heart className="w-4 h-4 text-red-500" />
+                    <span className="text-sm font-semibold text-gray-900">{format.avg_likes}</span>
+                  </div>
+                  <div className="text-xs text-gray-600">Avg Likes</div>
+                </div>
+                
+                <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                  <div className="flex items-center justify-center space-x-1 mb-1">
+                    <MessageCircle className="w-4 h-4 text-blue-500" />
+                    <span className="text-sm font-semibold text-gray-900">{format.avg_comments}</span>
+                  </div>
+                  <div className="text-xs text-gray-600">Avg Comments</div>
+                </div>
+                
+                <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                  <div className="flex items-center justify-center space-x-1 mb-1">
+                    <TrendingUp className="w-4 h-4 text-green-500" />
+                    <span className="text-sm font-semibold text-gray-900">
+                      {format.avg_reach >= 1000 ? `${(format.avg_reach / 1000).toFixed(1)}K` : format.avg_reach}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600">Avg Reach</div>
+                </div>
+                
+                <div className="bg-white/60 backdrop-blur-sm rounded-lg p-3 text-center">
+                  <div className="flex items-center justify-center space-x-1 mb-1">
+                    <Eye className="w-4 h-4 text-purple-500" />
+                    <span className="text-sm font-semibold text-gray-900">
+                      {format.avg_impressions >= 1000 ? `${(format.avg_impressions / 1000).toFixed(1)}K` : format.avg_impressions}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600">Avg Impressions</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    ) : (
+      <div className="text-center py-8">
+        <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <span className="text-gray-600 text-2xl">📊</span>
+        </div>
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">No Content Data Yet</h3>
+        <p className="text-gray-600 text-sm mb-4">
+          Connect your Instagram account and post different types of content to see performance analysis.
+        </p>
+        <p className="text-gray-700 text-sm">
+          We'll analyze Reels, Carousels, and Posts once you have data.
+        </p>
+      </div>
+    )}
+  </div>
+)}
+
+{/* Cross Analysis Performance View */}
+{contentView === 'cross-analysis' && (
+  <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+    <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+      <span className="mr-2">🎯</span>
+      Cross-Format Performance ({instagramData?.crossAnalysisStats?.length || 0} combinations)
+    </h3>
+    
+    {instagramData?.crossAnalysisStats && instagramData.crossAnalysisStats.length > 0 ? (
+      <div className="space-y-4">
+        {instagramData.crossAnalysisStats.map((item, index) => (
+          <div key={index} className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl p-4 border border-indigo-200">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
+                  <span className="text-white text-xs font-bold">#{index + 1}</span>
+                </div>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-lg">{getCategoryEmoji(item.content_category)}</span>
+                    <span className="font-semibold text-gray-900">{item.content_category}</span>
+                    <span className="text-sm text-gray-500">×</span>
+                    <span className="text-lg">{getFormatEmoji(item.post_type)}</span>
+                    <span className="font-semibold text-gray-900">{getFormatType(item.post_type)}</span>
+                  </div>
+                  <p className="text-xs text-gray-600">{item.count} posts</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm font-bold text-indigo-700">
+                  {formatNumber(item.avg_likes + item.avg_comments)} eng/post
+                </div>
+                <div className="text-xs text-gray-600">avg engagement</div>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-3">
+              <div className="text-center">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <Heart className="w-4 h-4 text-red-500" />
+                  <span className="font-bold text-gray-900">{formatNumber(item.avg_likes)}</span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Likes</div>
+              </div>
+              
+              <div className="text-center">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <MessageCircle className="w-4 h-4 text-blue-500" />
+                  <span className="font-bold text-gray-900">{formatNumber(item.avg_comments)}</span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Comments</div>
+              </div>
+              
+              <div className="text-center">
+                <div className="flex items-center justify-center space-x-1 mb-1">
+                  <TrendingUp className="w-4 h-4 text-green-500" />
+                  <span className="font-bold text-gray-900">{formatNumber(item.avg_reach || 0)}</span>
+                </div>
+                <div className="text-xs text-gray-600">Avg Reach</div>
+              </div>
+            </div>
+            
+            {/* Top Performer Badge (only for #1) */}
+            {index === 0 && (
+              <div className="mt-3 bg-indigo-100 rounded-lg p-2">
+                <div className="flex items-center space-x-1">
+                  <span className="text-indigo-600">🏆</span>
+                  <span className="text-sm font-medium text-indigo-800">Top Performing Combination</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    ) : (
+      <div className="text-center py-8">
+        <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <span className="text-2xl">🎯</span>
+        </div>
+        <h3 className="font-semibold text-gray-900 mb-2">No Cross-Analysis Data Yet</h3>
+        <p className="text-gray-600 text-sm mb-4">
+          Tag posts with categories to see how topics perform across different formats.
+        </p>
+        <div className="mt-4 bg-indigo-50 rounded-lg p-3 border border-indigo-200">
+          <p className="text-sm text-indigo-800">
+            <strong>Cross-analysis shows:</strong> How your content categories perform 
+            when combined with different formats (Reels, Posts, Carousels)
+          </p>
+          <p className="text-xs text-indigo-600 mt-1">
+            Need at least 2 posts per category-format combination for reliable insights
+          </p>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
+          {/* Quick Tagging Section */}
+          {instagramData?.untaggedPosts && instagramData.untaggedPosts.length > 0 && (
+            <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm">
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="mr-2">⚡</span>
+                Quick Tag ({instagramData.untaggedPosts.length}+ untagged posts)
+              </h3>
+              
+              <div className="space-y-3">
+                {instagramData.untaggedPosts.slice(0, 3).map((post: any) => (
+                  <div key={post.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 font-medium line-clamp-2">
+                        {post.caption?.slice(0, 80) || 'No caption'}...
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {getFormatName(post.post_type)} • {new Date(post.published_at).toLocaleDateString()} • 
+                        {post.likes_count} likes, {post.comments_count} comments
+                      </p>
+                    </div>
+                    
                     <button
-                      onClick={() => handleGrowthTimeFrameChange(period.key)}
-                      className={`flex-1 py-2 px-4 text-sm font-medium rounded-lg transition-all ${
-                        growthTimeFrame === period.key
-                          ? 'bg-white text-emerald-700 shadow-sm border border-emerald-300'
-                          : 'text-emerald-600 hover:text-emerald-700'
-                      }`}
+                      onClick={() => {
+                        setSelectedPostsForTagging([post.instagram_post_id]);
+                        setShowTaggingModal(true);
+                      }}
+                      className="bg-indigo-600 text-white px-3 py-1 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors ml-3"
                     >
-                      {period.label}
+                      Tag
                     </button>
-                  </ClickTracker>
+                  </div>
                 ))}
               </div>
             </div>
-
-            {/* Growth Rate Display */}
-            <ViewTracker
-              featureName="growth_rate_display"
-              metadata={{
-                timeframe: growthTimeFrame,
-                has_data: growthData.canCalculate,
-                followers: instagramData?.followers || 0
-              }}
-            >
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="mr-2">📈</span>
-                  {growthData.label}
-                </h3>
-                
-                {growthData.canCalculate ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-4 mb-4">
-                      <div className="text-center">
-                        <div className="text-3xl font-bold text-emerald-600 mb-1">
-                          {growthData.rate}
-                        </div>
-                        <div className="text-sm text-gray-600">Growth Rate</div>
-                      </div>
-                      <div className="text-center">
-                        <div className={`text-3xl font-bold mb-1 ${absoluteChange?.isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
-                          {absoluteChange?.formatted || '--'}
-                        </div>
-                        <div className="text-sm text-gray-600">Followers {growthTimeFrame === 'weekly' ? 'This Week' : 'This Month'}</div>
-                      </div>
-                    </div>
-                    
-                    <div className="text-center text-sm text-gray-600">
-                      Growth over {growthData.period}
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-center py-6">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <span className="text-gray-400 text-2xl">📊</span>
-                    </div>
-                    <h4 className="text-lg font-semibold text-gray-900 mb-2">Not Enough Data Yet</h4>
-                    <p className="text-gray-600 text-sm mb-4">
-                      We need {growthTimeFrame === 'weekly' ? '7' : '30'} days of data to calculate accurate {growthTimeFrame} growth rates.
-                    </p>
-                    <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
-                      <div className="text-sm font-medium text-blue-900">
-                        {growthData.label} available in {growthData.daysUntil} days
-                      </div>
-                      <div className="text-xs text-blue-700 mt-1">
-                        We're currently collecting data - check back soon!
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </ViewTracker>
-
-            {/* Account Performance - Monthly Only */}
-{(() => {
-  const timeframeMetrics = getTimeframeSpecificTotalMetrics();
-  
-  // Only show for monthly timeframe
-  if (!timeframeMetrics || growthTimeFrame !== 'monthly') {
-    return null;
-  }
-  
-  // Show message if no account insights available
-  if (!timeframeMetrics.isAccountLevel) {
-    return (
-      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-        <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-          <span className="mr-2">👁️</span>
-          Account Performance (Last 30 Days)
-        </h3>
-        
-        <div className="text-center py-6">
-          <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-            <span className="text-gray-400 text-xl">📊</span>
-          </div>
-          <p className="text-gray-600 text-sm">
-            Account-level insights not available. Connect a Business or Creator Instagram account to see profile visits and total reach data.
-          </p>
+          )}
         </div>
       </div>
     );
   }
 
-  return (
-    <ViewTracker
-      featureName="account_performance_insights"
-      metadata={{
-        timeframe: growthTimeFrame,
-        posts_in_timeframe: timeframeMetrics.postsCount,
-        total_reach: timeframeMetrics.totalReach
-      }}
-    >
-      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-        <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-          <span className="mr-2">👁️</span>
-          Account Performance (Last 30 Days)
-        </h3>
-        
-        <div className="grid grid-cols-2 gap-4">
-          <div className="text-center">
-            <div className="text-2xl font-bold text-blue-600 mb-1">
-              {timeframeMetrics.totalProfileVisits.toLocaleString()}
-            </div>
-            <div className="text-sm text-gray-600">Total Profile Visits</div>
-            <div className="text-xs text-gray-500 mt-1">
-              30-day account total
-            </div>
-          </div>
-          
-          <div className="text-center">
-            <div className="text-2xl font-bold text-emerald-600 mb-1">
-              {timeframeMetrics.totalReach >= 1000 ? 
-                (timeframeMetrics.totalReach / 1000).toFixed(1) + 'K' :
-                timeframeMetrics.totalReach.toLocaleString()
-              }
-            </div>
-            <div className="text-sm text-gray-600">Total Account Reach</div>
-            <div className="text-xs text-gray-500 mt-1">
-              30-day account total
-            </div>
-          </div>
+  if (category.id === 'sentiment_analysis') {
+      const sentimentData = instagramData?.recentPosts ? analyzeSentiment(instagramData.recentPosts) : null;
 
-          {timeframeMetrics.totalImpressions > 0 && (
-            <div className="text-center col-span-2">
-              <div className="text-2xl font-bold text-purple-600 mb-1">
-                {timeframeMetrics.totalImpressions >= 1000 ? 
-                  (timeframeMetrics.totalImpressions / 1000).toFixed(1) + 'K' :
-                  timeframeMetrics.totalImpressions.toLocaleString()
-                }
-              </div>
-              <div className="text-sm text-gray-600">Total Impressions</div>
-              <div className="text-xs text-gray-500 mt-1">
-                30-day account total
-              </div>
-            </div>
-          )}
-        </div>
+      // Track when user enters sentiment detail view
+      useEffect(() => {
+        trackFeature('sentiment_analysis_detail', 'view', {
+          has_data: !!sentimentData,
+          total_comments: sentimentData?.overallSentiment.totalComments || 0
+        })
+      }, [sentimentData])
 
-        <div className="mt-4 text-xs text-gray-500 text-center">
-          Account-level metrics • {timeframeMetrics.postsCount} posts published in last 30 days
-        </div>
-      </div>
-    </ViewTracker>
-  );
-})()}
-
-            {/* Follower History Bar Chart - Vertical Bars */}
-            {chartData.length > 0 && (
-              <ViewTracker
-                featureName="growth_history_chart"
-                metadata={{
-                  timeframe: growthTimeFrame,
-                  data_points: chartData.length,
-                  current_followers: instagramData?.followers || 0
-                }}
-              >
-                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                  <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                    <span className="mr-2">📊</span>
-                    Follower History ({growthTimeFrame === 'weekly' ? 'Last 4 Weeks' : 'Last 6 Months'})
-                  </h3>
-                  
-                  {/* Vertical Bar Chart */}
-                  <div className="relative">
-                    {/* Y-axis labels (follower counts) */}
-                    <div className="flex items-end justify-between h-40 mb-3">
-                      {chartData.map((dataPoint, index) => {
-                        const height = maxFollowers > 0 ? (dataPoint.followers / maxFollowers) * 100 : 0;
-                        return (
-                          <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/chartData.length}%` }}>
-                            {/* Follower count label */}
-                            <div className="text-xs font-bold text-gray-900 mb-1">
-                              {dataPoint.followers >= 1000 ? 
-                                `${(dataPoint.followers / 1000).toFixed(1)}K` : 
-                                dataPoint.followers.toLocaleString()
-                              }
-                            </div>
-                            
-                            {/* Vertical bar */}
-                            <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
-                              <div 
-                                className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
-                                  dataPoint.isCurrentPeriod 
-                                    ? 'bg-gradient-to-t from-emerald-400 to-emerald-600' 
-                                    : 'bg-gradient-to-t from-emerald-300 to-emerald-500'
-                                }`}
-                                style={{ height: `${Math.max(height, 8)}%` }}
-                              />
-                              {dataPoint.isCurrentPeriod && (
-                                <div className="absolute bottom-0 w-full bg-gradient-to-t from-emerald-400 to-emerald-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    
-                    {/* X-axis labels (time periods) */}
-                    <div className="flex justify-between border-t border-gray-200 pt-2">
-                      {chartData.map((dataPoint, index) => (
-                        <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/chartData.length}%` }}>
-                          {dataPoint.label}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  <div className="mt-4 text-xs text-gray-500 text-center">
-                    {growthTimeFrame === 'weekly' ? 
-                      'Current week updates daily until Sunday' : 
-                      'Current month updates daily until month end'
-                    }
-                  </div>
-                </div>
-              </ViewTracker>
-            )}
-
-            {/* Data Collection Status */}
-            <div className="bg-emerald-50 rounded-2xl p-4">
-              <h3 className="font-semibold text-emerald-900 mb-2">📊 Data Collection Status</h3>
-              <div className="space-y-2 text-sm">
-                <p className="text-emerald-800">
-                  • <strong>{instagramData?.growthData?.daysOfData || 0} days</strong> of follower data collected
-                </p>
-                {instagramData?.growthData?.dataAvailableSince && (
-                  <p className="text-emerald-800">
-                    • Tracking started: <strong>{instagramData.growthData.dataAvailableSince}</strong>
-                  </p>
-                )}
-                <p className="text-emerald-800">
-                  • Weekly growth rates: <strong>{instagramData?.growthData?.canCalculateWeekly ? 'Available' : `Available in ${instagramData?.growthData?.daysUntilWeekly || 7} days`}</strong>
-                </p>
-                <p className="text-emerald-800">
-                  • Monthly growth rates: <strong>{instagramData?.growthData?.canCalculateMonthly ? 'Available' : `Available in ${instagramData?.growthData?.daysUntilMonthly || 30} days`}</strong>
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    if (category.id === 'engagement') {
-      // Calculate 30-day engagement metrics from real data
-      const calculateEngagementMetrics = () => {
-        if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
-          return {
-            engagementRate: instagramData?.engagementRate || '--',
-            avgLikes: instagramData?.avgLikes || 0,
-            avgComments: instagramData?.avgComments || 0,
-            avgReach: instagramData?.avgReach || 0,
-            avgSaves: 0
-          };
-        }
-
-        const now = new Date();
-        const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
-
-        // Filter posts from last 30 days
-        const last30DaysPosts = instagramData.recentPosts.filter(post => {
-          const postDate = new Date(post.timestamp);
-          return postDate >= thirtyDaysAgo;
-        });
-
-        if (last30DaysPosts.length === 0) {
-          return {
-            engagementRate: '--',
-            avgLikes: 0,
-            avgComments: 0,
-            avgReach: 0,
-            avgSaves: 0
-          };
-        }
-
-        // Calculate metrics from last 30 days
-        const totalLikes = last30DaysPosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
-        const totalComments = last30DaysPosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
-        const totalReach = last30DaysPosts.reduce((sum, post) => sum + (post.reach || 0), 0);
-        const totalSaves = last30DaysPosts.reduce((sum, post) => sum + (post.saves || 0), 0);
-        const totalEngagement = totalLikes + totalComments;
-
-        const avgLikes = Math.round(totalLikes / last30DaysPosts.length);
-        const avgComments = Math.round(totalComments / last30DaysPosts.length);
-        const avgReach = totalReach > 0 ? Math.round(totalReach / last30DaysPosts.length) : 0;
-        const avgSaves = Math.round(totalSaves / last30DaysPosts.length);
-
-        // Calculate engagement rate
-        let engagementRate = '--';
-        if (totalReach > 0) {
-          const rate = (totalEngagement / totalReach) * 100;
-          engagementRate = `${rate.toFixed(1)}%`;
-        } else if (instagramData.followers > 0) {
-          const avgFollowersReached = instagramData.followers * last30DaysPosts.length;
-          const rate = (totalEngagement / avgFollowersReached) * 100;
-          engagementRate = `${rate.toFixed(1)}%`;
-        }
-
-        return {
-          engagementRate,
-          avgLikes,
-          avgComments,
-          avgReach,
-          avgSaves
-        };
-      };
-
-      const engagementMetrics = calculateEngagementMetrics();
-
-      // Generate engagement rate history for last 6 months
-      const generateEngagementHistory = () => {
-        if (!instagramData?.recentPosts || instagramData.recentPosts.length === 0) {
-          return [];
-        }
-
-        const months = [];
-        const today = new Date();
-        
-        for (let i = 5; i >= 0; i--) {
-          const monthStart = new Date(today.getFullYear(), today.getMonth() - i, 1);
-          const monthEnd = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
-          const isCurrentMonth = i === 0;
-          
-          // Filter posts for this month
-          const monthPosts = instagramData.recentPosts.filter(post => {
-            const postDate = new Date(post.timestamp);
-            return postDate >= monthStart && postDate <= monthEnd;
-          });
-
-          let monthlyEngagementRate = 0;
-          if (monthPosts.length > 0) {
-            const totalLikes = monthPosts.reduce((sum, post) => sum + (post.like_count || 0), 0);
-            const totalComments = monthPosts.reduce((sum, post) => sum + (post.comments_count || 0), 0);
-            const totalReach = monthPosts.reduce((sum, post) => sum + (post.reach || 0), 0);
-            const totalEngagement = totalLikes + totalComments;
-
-            if (totalReach > 0) {
-              monthlyEngagementRate = (totalEngagement / totalReach) * 100;
-            } else if (instagramData.followers > 0) {
-              const avgFollowersReached = instagramData.followers * monthPosts.length;
-              monthlyEngagementRate = (totalEngagement / avgFollowersReached) * 100;
-            }
-          }
-
-          const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'short' });
-          
-          months.push({
-            label: monthLabel,
-            engagementRate: monthlyEngagementRate,
-            isCurrentPeriod: isCurrentMonth,
-            date: monthStart.toISOString(),
-            postsCount: monthPosts.length
-          });
-        }
-        
-        return months;
-      };
-
-      const engagementHistory = generateEngagementHistory();
-      const maxEngagementRate = Math.max(...engagementHistory.map(d => d.engagementRate));
+      // Debug logging to verify sentiment data
+useEffect(() => {
+  if (sentimentData) {
+    console.log('Sentiment Analysis in Detail View:', {
+      hasData: !!sentimentData,
+      timeAnalysisLength: sentimentData.timeAnalysis?.length || 0,
+      months: sentimentData.timeAnalysis?.map(m => m.month) || [],
+      totalComments: sentimentData.overallSentiment?.totalComments || 0,
+      firstMonth: sentimentData.timeAnalysis?.[0]?.month,
+      lastMonth: sentimentData.timeAnalysis?.[sentimentData.timeAnalysis.length - 1]?.month
+    });
+  }
+}, [sentimentData]);
 
       return (
-        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-blue-50 to-purple-50">
-          <div className="bg-white/95 backdrop-blur-sm border-b border-blue-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
+        <div className="min-h-screen pb-20 overflow-y-auto bg-gradient-to-b from-pink-50 to-rose-50">
+          {/* Header */}
+          <div className="bg-white/95 backdrop-blur-sm border-b border-pink-200/50 px-4 py-3 flex items-center sticky top-0 z-10">
             <ClickTracker
-              featureName="engagement_metrics_back"
-              metadata={{ engagement_rate: engagementMetrics.engagementRate }}
+              featureName="sentiment_analysis_back"
+              metadata={{ has_data: !!sentimentData }}
             >
               <button 
                 onClick={() => setSelectedMetricCategory(null)}
-                className="mr-3 text-blue-600 font-medium"
+                className="mr-3 text-pink-600 font-medium"
               >
                 ← Back
               </button>
             </ClickTracker>
             <div className="flex items-center">
-              <span className="mr-2">💬</span>
-              <h1 className="text-xl font-bold text-gray-900">Engagement Metrics</h1>
+              <span className="mr-2">💭</span>
+              <h1 className="text-xl font-bold text-gray-900">Audience Sentiment</h1>
             </div>
           </div>
 
           <div className="p-4">
-            <div className="bg-gradient-to-br from-blue-100 to-purple-100 border-blue-200 rounded-2xl p-4 mb-6 shadow-sm border">
-              <h2 className="text-lg font-bold text-gray-900 mb-2">Audience Interaction (Last 30 Days)</h2>
-              <p className="text-blue-800 text-sm">
-                Measure how actively your audience engages with your content over the past month.
-              </p>
+            {/* Overview */}
+            <div className="bg-gradient-to-br from-pink-100 to-rose-100 border-pink-200 rounded-2xl p-4 mb-6 shadow-sm border">
+              <h2 className="text-lg font-bold text-gray-900 mb-2">How Your Audience Feels</h2>
+              <p className="text-pink-800 text-sm">
+  {sentimentData && sentimentData.overallSentiment.totalComments > 0
+    ? `Real sentiment analysis based on ${sentimentData.overallSentiment.totalComments} actual comments from your posts. ${
+        sentimentData.timeAnalysis.length > 0 
+          ? `Historical data spans ${sentimentData.timeAnalysis.length} month${sentimentData.timeAnalysis.length > 1 ? 's' : ''}.` 
+          : ''
+      }`
+    : 'Post content that encourages comments to see real sentiment analysis from actual comment text.'
+  }
+</p>
             </div>
 
-            {/* Main Engagement Rate Circle */}
-            <ViewTracker
-              featureName="engagement_rate_circle"
-              metadata={{
-                engagement_rate: engagementMetrics.engagementRate,
-                avg_likes: engagementMetrics.avgLikes,
-                avg_comments: engagementMetrics.avgComments
-              }}
-            >
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-white/50 shadow-sm mb-6 text-center">
-                <h3 className="font-semibold text-gray-900 mb-4 flex items-center justify-center">
-                  <span className="mr-2">🎯</span>
-                  Overall Engagement Rate
-                </h3>
-                
-                <div className="relative w-32 h-32 mx-auto mb-4">
-                  <div className="absolute inset-0 rounded-full border-8 border-gray-200"></div>
-                  <div 
-                    className="absolute inset-0 rounded-full border-8 border-blue-500 transition-all duration-1000"
-                    style={{
-                      clipPath: `polygon(50% 50%, 50% 0%, ${
-                        50 + 50 * Math.cos((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
-                      }% ${
-                        50 - 50 * Math.sin((parseFloat(engagementMetrics.engagementRate?.replace('%', '') || '0') / 10) * 2 * Math.PI - Math.PI/2)
-                      }%, 50% 50%)`
-                    }}
-                  ></div>
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div>
-                      <div className="text-2xl font-bold text-blue-600">
-                        {engagementMetrics.engagementRate}
-                      </div>
-                      <div className="text-xs text-gray-600">Engagement</div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="text-sm text-gray-600">
-                  Based on posts from the last 30 days
-                </div>
-              </div>
-            </ViewTracker>
-
-            {/* Engagement Breakdown */}
-            <ViewTracker
-              featureName="engagement_breakdown"
-              metadata={{
-                total_metrics: 4,
-                has_reach_data: engagementMetrics.avgReach > 0
-              }}
-            >
-              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                  <span className="mr-2">📊</span>
-                  Engagement Breakdown (Last 30 Days)
-                </h3>
-                
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <Heart className="w-5 h-5 text-red-500" />
-                      <span className="text-sm font-medium text-gray-700">Avg Likes per Post</span>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-gray-900">
-                        {engagementMetrics.avgLikes.toLocaleString()}
-                      </div>
-                      <div className="w-16 bg-gray-200 rounded-full h-2">
-                        <div className="bg-gradient-to-r from-red-400 to-pink-500 h-2 rounded-full" style={{width: '80%'}}></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <MessageCircle className="w-5 h-5 text-blue-500" />
-                      <span className="text-sm font-medium text-gray-700">Avg Comments per Post</span>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-gray-900">
-                        {engagementMetrics.avgComments.toLocaleString()}
-                      </div>
-                      <div className="w-16 bg-gray-200 rounded-full h-2">
-                        <div className="bg-gradient-to-r from-blue-400 to-blue-600 h-2 rounded-full" style={{width: '65%'}}></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <TrendingUp className="w-5 h-5 text-green-500" />
-                      <span className="text-sm font-medium text-gray-700">Avg Reach per Post</span>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-gray-900">
-                        {engagementMetrics.avgReach > 0 ? engagementMetrics.avgReach.toLocaleString() : '--'}
-                      </div>
-                      <div className="w-16 bg-gray-200 rounded-full h-2">
-                        <div className="bg-gradient-to-r from-green-400 to-emerald-500 h-2 rounded-full" style={{width: '70%'}}></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <Bookmark className="w-5 h-5 text-purple-500" />
-                      <span className="text-sm font-medium text-gray-700">Avg Saves per Post</span>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-gray-900">
-                        {engagementMetrics.avgSaves.toLocaleString()}
-                      </div>
-                      <div className="w-16 bg-gray-200 rounded-full h-2">
-                        <div className="bg-gradient-to-r from-purple-400 to-purple-600 h-2 rounded-full" style={{width: '55%'}}></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </ViewTracker>
-
-            {/* Engagement Rate History Bar Chart */}
-            {engagementHistory.length > 0 && (
-              <ViewTracker
-                featureName="engagement_history_chart"
-                metadata={{
-                  months_analyzed: engagementHistory.length,
-                  max_rate: maxEngagementRate
-                }}
-              >
-                <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
-                  <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
-                    <span className="mr-2">📈</span>
-                    Engagement Rate History (Last 6 Months)
-                  </h3>
-                  
-                  {/* Vertical Bar Chart */}
-                  <div className="relative">
-                    {/* Y-axis labels (engagement rates) */}
-                    <div className="flex items-end justify-between h-40 mb-3">
-                      {engagementHistory.map((dataPoint, index) => {
-                        const height = maxEngagementRate > 0 ? (dataPoint.engagementRate / maxEngagementRate) * 100 : 0;
-                        return (
-                          <div key={index} className="flex flex-col items-center space-y-2" style={{ width: `${100/engagementHistory.length}%` }}>
-                            {/* Engagement rate label */}
-                            <div className="text-xs font-bold text-gray-900 mb-1">
-                              {dataPoint.engagementRate > 0 ? `${dataPoint.engagementRate.toFixed(1)}%` : '--'}
-                            </div>
-                            
-                            {/* Vertical bar */}
-                            <div className="relative w-8 bg-gray-100 rounded-t-lg overflow-hidden" style={{ height: '120px' }}>
-                              <div 
-                                className={`absolute bottom-0 w-full transition-all duration-700 rounded-t-lg ${
-                                  dataPoint.isCurrentPeriod 
-                                    ? 'bg-gradient-to-t from-blue-400 to-blue-600' 
-                                    : 'bg-gradient-to-t from-blue-300 to-blue-500'
-                                }`}
-                                style={{ height: `${Math.max(height, 8)}%` }}
-                              />
-                              {dataPoint.isCurrentPeriod && (
-                                <div className="absolute bottom-0 w-full bg-gradient-to-t from-blue-400 to-blue-600 opacity-20 animate-pulse rounded-t-lg" style={{ height: `${Math.max(height, 8)}%` }} />
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+            {sentimentData && sentimentData.overallSentiment.totalComments > 0 ? (
+              <>
+                {/* Overall Sentiment Breakdown */}
+                <ViewTracker
+                  featureName="sentiment_overview"
+                  metadata={{
+                    positive_percentage: sentimentData.overallSentiment.positive,
+                    negative_percentage: sentimentData.overallSentiment.negative,
+                    total_comments: sentimentData.overallSentiment.totalComments
+                  }}
+                >
+                  <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                    <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                      <span className="mr-2">📊</span>
+                      Overall Sentiment Breakdown
+                    </h3>
                     
-                    {/* X-axis labels (months) */}
-                    <div className="flex justify-between border-t border-gray-200 pt-2">
-                      {engagementHistory.map((dataPoint, index) => (
-                        <div key={index} className="text-xs text-gray-600 text-center" style={{ width: `${100/engagementHistory.length}%` }}>
-                          {dataPoint.label}
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      <div className="text-center bg-green-50 rounded-xl p-4">
+                        <div className="text-2xl font-bold text-green-600">{sentimentData.overallSentiment.positive}%</div>
+                        <div className="text-sm text-green-700">Positive</div>
+                        <div className="text-xs text-gray-600 mt-1">reactions</div>
+                      </div>
+                      <div className="text-center bg-gray-50 rounded-xl p-4">
+                        <div className="text-2xl font-bold text-gray-600">{sentimentData.overallSentiment.neutral}%</div>
+                        <div className="text-sm text-gray-700">Neutral</div>
+                        <div className="text-xs text-gray-600 mt-1">reactions</div>
+                      </div>
+                      <div className="text-center bg-red-50 rounded-xl p-4">
+                        <div className="text-2xl font-bold text-red-600">{sentimentData.overallSentiment.negative}%</div>
+                        <div className="text-sm text-red-700">Negative</div>
+                        <div className="text-xs text-gray-600 mt-1">reactions</div>
+                      </div>
+                    </div>
+
+                    {/* Sentiment Score */}
+                    <div className="bg-gradient-to-r from-pink-50 to-rose-50 rounded-lg p-3 border border-pink-200">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-sm font-medium text-gray-900">Overall Sentiment Score</span>
+                          <p className="text-xs text-gray-600">Higher scores indicate more positive audience reactions</p>
                         </div>
-                      ))}
+                        <div className="text-right">
+                          <div className={`text-xl font-bold ${
+                            sentimentData.insights.averageSentimentScore > 20 ? 'text-green-600' :
+                            sentimentData.insights.averageSentimentScore > 0 ? 'text-blue-600' : 'text-red-600'
+                          }`}>
+                            {sentimentData.insights.averageSentimentScore > 0 ? '+' : ''}{sentimentData.insights.averageSentimentScore}
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            {sentimentData.insights.averageSentimentScore > 20 ? 'Excellent' :
+                             sentimentData.insights.averageSentimentScore > 0 ? 'Good' : 'Needs Work'}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  
-                  <div className="mt-4 text-xs text-gray-500 text-center">
-                    Current month updates daily until month end
+                </ViewTracker>
+
+                {/* Sentiment by Tagged Categories */}
+                {instagramData?.categoryStats && instagramData.categoryStats.length > 0 ? (
+                  <ViewTracker
+                    featureName="sentiment_by_categories"
+                    metadata={{
+                      categories_analyzed: instagramData.categoryStats.length,
+                      tagged_posts: instagramData.categoryStats.reduce((sum, cat) => sum + cat.count, 0)
+                    }}
+                  >
+                    <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                      <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                        <span className="mr-2">🏷️</span>
+                        Sentiment by Content Category
+                      </h3>
+                      
+                      <div className="space-y-3">
+                        {(() => {
+                          const categoryAnalysis = getCategorySentimentData(instagramData);
+                          return categoryAnalysis?.map((category, index) => {
+                            const emoji = getCategoryEmoji(category.category);
+                            
+                            return (
+                              <div key={category.category} className="bg-gray-50 rounded-xl p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-xl">{emoji}</span>
+                                    <div>
+                                      <span className="font-medium text-gray-900">{category.category}</span>
+                                      <p className="text-xs text-gray-600">{category.postCount} posts tagged</p>
+                                    </div>
+                                  </div>
+                                  <span className={`text-sm font-bold px-2 py-1 rounded-full ${
+                                    category.sentiment_score > 20 ? 'bg-green-100 text-green-700' :
+                                    category.sentiment_score > 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                                  }`}>
+                                    {category.sentiment_score > 0 ? '+' : ''}{category.sentiment_score}
+                                  </span>
+                                </div>
+                                
+                                {/* Visual sentiment bar */}
+                                <div className="flex rounded-lg overflow-hidden h-3 mb-2">
+                                  <div 
+                                    className="bg-green-500"
+                                    style={{width: `${category.positive}%`}}
+                                  ></div>
+                                  <div 
+                                    className="bg-gray-400"
+                                    style={{width: `${category.neutral}%`}}
+                                  ></div>
+                                  <div 
+                                    className="bg-red-500"
+                                    style={{width: `${category.negative}%`}}
+                                  ></div>
+                                </div>
+                                
+                                <div className="flex justify-between text-xs text-gray-600">
+                                  <span>{category.positive}% positive</span>
+                                  <span>~{category.totalComments} comments</span>
+                                  <span>{category.negative}% negative</span>
+                                </div>
+                                
+                                {/* Engagement context */}
+                                <div className="mt-2 text-xs text-gray-500 text-center">
+                                  Avg engagement: {category.avgEngagement} per post
+                                </div>
+                              </div>
+                            );
+                          }) || [];
+                        })()}
+                      </div>
+                      
+                      <div className="mt-4 bg-pink-50 rounded-lg p-3 border border-pink-200">
+                        <p className="text-sm text-pink-800">
+                          <strong>💡 Note:</strong> Sentiment analysis for categories is estimated based on engagement patterns. 
+                          Higher engagement categories typically receive more positive reactions.
+                        </p>
+                      </div>
+                    </div>
+                  </ViewTracker>
+                ) : (
+                  /* Show message about needing tagged posts */
+                  <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+                    <h3 className="font-semibold text-gray-900 mb-4 flex items-center">
+                      <span className="mr-2">🏷️</span>
+                      Sentiment by Content Category
+                    </h3>
+                    
+                    <div className="text-center py-6">
+                      <div className="w-16 h-16 bg-pink-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <span className="text-pink-600 text-2xl">🏷️</span>
+                      </div>
+                      <h4 className="text-lg font-semibold text-gray-900 mb-2">Tag Your Posts First</h4>
+                      <p className="text-gray-600 text-sm mb-4">
+                        Tag at least 5 posts with categories to see sentiment analysis by content type.
+                      </p>
+                      <div className="bg-pink-50 rounded-lg p-4 border border-pink-200">
+                        <p className="text-sm text-pink-800">
+                          <strong>🚀 Quick Start:</strong> Go to the Content Categories section in your dashboard 
+                          to start tagging your posts with categories like "Tutorial", "Behind the Scenes", etc.
+                        </p>
+                      </div>
+                    </div>
                   </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-pink-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-pink-600 text-2xl">💬</span>
                 </div>
-              </ViewTracker>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">No Comment Data Yet</h3>
+                <p className="text-gray-600 text-sm mb-4">
+                  Post content that encourages comments to unlock sentiment analysis insights.
+                </p>
+                <div className="bg-pink-50 rounded-lg p-4 border border-pink-200 max-w-md mx-auto">
+                  <h4 className="font-medium text-pink-900 mb-2">💡 Tips to Get Comments</h4>
+                  <ul className="text-sm text-pink-800 space-y-1 text-left">
+                    <li>• Ask questions in your captions</li>
+                    <li>• Share personal stories or experiences</li>
+                    <li>• Create polls or "this or that" posts</li>
+                    <li>• Respond to comments to encourage more</li>
+                    <li>• Post controversial (but respectful) opinions</li>
+                  </ul>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -3483,15 +4485,15 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
           <div className="grid grid-cols-2 gap-3">
             {metricCategories.map((category, index) => {
               const cardColors = [
-                'bg-gradient-to-br from-emerald-100 to-teal-100 border-emerald-200',
-                'bg-gradient-to-br from-blue-100 to-indigo-100 border-blue-200', 
-                'bg-gradient-to-br from-purple-100 to-pink-100 border-purple-200',
-                'bg-gradient-to-br from-orange-100 to-red-100 border-orange-200',
-                'bg-gradient-to-br from-cyan-100 to-blue-100 border-cyan-200',
-                'bg-gradient-to-br from-violet-100 to-purple-100 border-violet-200'
-              ];
+  'bg-gradient-to-br from-emerald-100 to-blue-100 border-emerald-200',   // Combined Growth & Engagement
+  'bg-gradient-to-br from-purple-100 to-pink-100 border-purple-200',    // Timing
+  'bg-gradient-to-br from-orange-100 to-red-100 border-orange-200',     // Frequency  
+  'bg-gradient-to-br from-cyan-100 to-blue-100 border-cyan-200',        // Content Categories
+  'bg-gradient-to-br from-violet-100 to-purple-100 border-violet-200',  // Top Followers
+  'bg-gradient-to-br from-pink-100 to-rose-100 border-pink-200'         // Sentiment Analysis (NEW)
+];
               return (
-                <div className="h-full">
+                <div key={category.id} className="h-full">
   <ViewTracker
     key={category.id}
     featureName={`metric_category_${category.id}_viewed`}
@@ -4018,6 +5020,12 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
     setShowDetailedAnalysis(false);
   };
 
+  // Calculate sentiment data once for the entire component
+  const sentimentData = useMemo(() => {
+    if (!instagramData?.recentPosts) return null;
+    return analyzeSentiment(instagramData.recentPosts);
+  }, [instagramData?.recentPosts]);
+
   // Enhanced recommendations based on real data
   const getEnhancedRecommendations = () => {
     if (!instagramData?.recentPosts?.length) {
@@ -4439,7 +5447,6 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
     <div className="bg-white/80 rounded-xl p-4 mb-4">
       <p className="text-gray-800 leading-relaxed">
         {(() => {
-          const sentimentData = instagramData?.recentPosts ? analyzeSentiment(instagramData.recentPosts) : null;
           if (sentimentData) {
             const { overallSentiment, insights } = sentimentData;
             const trend = insights.sentimentTrend === 'improving' ? 'improving' : 
@@ -5080,46 +6087,211 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
             </div>
           </div>
 
-          {/* Sentiment Over Time */}
-          {sentimentData.timeAnalysis.length > 1 && (
-            <div className="bg-white rounded-xl p-4 border border-gray-200">
-              <div className="flex items-center space-x-2 mb-3">
-                <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                  <TrendingUp className="w-4 h-4 text-blue-600" />
-                </div>
-                <span className="font-medium text-gray-900">Sentiment Trend (Last 6 Months)</span>
-              </div>
+          {/* Enhanced Sentiment Over Time - Based on your existing working pattern */}
+{sentimentData && sentimentData.timeAnalysis && sentimentData.timeAnalysis.length > 0 && (
+  <ViewTracker
+    featureName="sentiment_trend_detailed"
+    metadata={{
+      months_analyzed: sentimentData.timeAnalysis.length,
+      trend_direction: sentimentData.insights.sentimentTrend
+    }}
+  >
+    <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-white/50 shadow-sm mb-6">
+      <div className="flex items-center space-x-2 mb-4">
+        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+          <TrendingUp className="w-4 h-4 text-blue-600" />
+        </div>
+        <div className="flex-1">
+          <span className="font-medium text-gray-900">Historical Sentiment Trend</span>
+          <p className="text-xs text-gray-600">
+            {sentimentData.timeAnalysis.length === 1 
+              ? 'First month of data' 
+              : `${sentimentData.timeAnalysis.length} months of sentiment analysis`}
+          </p>
+        </div>
+      </div>
+      
+      {/* Trend Summary */}
+      {sentimentData.timeAnalysis.length > 1 && (
+        <div className="bg-gradient-to-r from-pink-50 to-rose-50 rounded-lg p-3 mb-4 border border-pink-200">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-pink-900">
+              Overall Trend: <strong className="capitalize">{sentimentData.insights.sentimentTrend}</strong>
+            </span>
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+              sentimentData.insights.sentimentTrend === 'improving' ? 'bg-green-100 text-green-800' :
+              sentimentData.insights.sentimentTrend === 'declining' ? 'bg-red-100 text-red-800' :
+              'bg-blue-100 text-blue-800'
+            }`}>
+              {sentimentData.insights.sentimentTrend === 'improving' ? '📈 Improving' :
+               sentimentData.insights.sentimentTrend === 'declining' ? '📉 Declining' : 
+               '➡️ Stable'}
+            </span>
+          </div>
+        </div>
+      )}
+      
+      {/* Visual Chart */}
+      <div className="mb-4">
+        {/* Chart Header */}
+        <div className="flex justify-between items-center mb-2 text-xs text-gray-600">
+          <span>Sentiment Score</span>
+          <span>Timeline</span>
+        </div>
+        
+        {/* Chart Area */}
+        <div className="relative bg-gray-50 rounded-lg p-4" style={{ minHeight: '200px' }}>
+          {/* Y-axis labels */}
+          <div className="absolute left-0 top-0 bottom-0 w-8 flex flex-col justify-between text-xs text-gray-500">
+            <span>+50</span>
+            <span>0</span>
+            <span>-50</span>
+          </div>
+          
+          {/* Chart content */}
+          <div className="ml-10 h-full relative">
+            {/* Zero line */}
+            <div className="absolute top-1/2 left-0 right-0 border-t border-gray-300"></div>
+            
+            {/* Data points and lines */}
+            <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+              {/* Draw connecting lines */}
+              <polyline
+                fill="none"
+                stroke="url(#gradient)"
+                strokeWidth="2"
+                points={sentimentData.timeAnalysis.map((month, index) => {
+                  const x = (index / (sentimentData.timeAnalysis.length - 1 || 1)) * 100;
+                  const y = 50 - (month.sentiment_score / 100) * 50; // Normalize to 0-100 scale
+                  return `${x},${y}`;
+                }).join(' ')}
+              />
               
-              <div className="space-y-2">
-                {sentimentData.timeAnalysis.map((month, index) => {
-                  const monthName = new Date(month.month + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-                  
-                  return (
-                    <div key={month.month} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                      <span className="text-sm text-gray-700 min-w-[80px]">{monthName}</span>
-                      <div className="flex items-center space-x-2 flex-1 mx-3">
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div 
-                            className={`h-2 rounded-full ${
-                              month.sentiment_score > 20 ? 'bg-green-500' :
-                              month.sentiment_score > 0 ? 'bg-blue-500' : 'bg-red-500'
-                            }`}
-                            style={{width: `${Math.abs(month.sentiment_score) + 20}%`}}
-                          ></div>
+              {/* Gradient definition */}
+              <defs>
+                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#ec4899" />
+                  <stop offset="100%" stopColor="#3b82f6" />
+                </linearGradient>
+              </defs>
+            </svg>
+            
+            {/* Data points */}
+            <div className="relative h-full flex items-end justify-between">
+              {sentimentData.timeAnalysis.map((month, index) => {
+                const monthName = new Date(month.month + '-01').toLocaleDateString('en-US', { month: 'short' });
+                const isLatest = index === sentimentData.timeAnalysis.length - 1;
+                const normalizedHeight = 50 + (month.sentiment_score / 100) * 50; // 0-100 scale
+                
+                return (
+                  <div key={month.month} className="flex-1 flex flex-col items-center justify-end relative">
+                    {/* Data point */}
+                    <div 
+                      className="absolute"
+                      style={{ bottom: `${normalizedHeight}%`, transform: 'translateY(50%)' }}
+                    >
+                      <div className={`w-3 h-3 rounded-full border-2 ${
+                        month.sentiment_score > 20 ? 'bg-green-500 border-green-600' :
+                        month.sentiment_score > 0 ? 'bg-blue-500 border-blue-600' :
+                        'bg-red-500 border-red-600'
+                      } ${isLatest ? 'w-4 h-4' : ''}`}>
+                        {/* Tooltip on hover */}
+                        <div className="absolute bottom-full mb-2 left-1/2 transform -translate-x-1/2 opacity-0 hover:opacity-100 transition-opacity pointer-events-none">
+                          <div className="bg-gray-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
+                            Score: {month.sentiment_score > 0 ? '+' : ''}{month.sentiment_score}
+                            <br />
+                            {month.totalComments} comments
+                          </div>
                         </div>
                       </div>
-                      <span className={`text-sm font-bold min-w-[40px] text-right ${
-                        month.sentiment_score > 20 ? 'text-green-600' :
-                        month.sentiment_score > 0 ? 'text-blue-600' : 'text-red-600'
-                      }`}>
-                        {month.sentiment_score > 0 ? '+' : ''}{month.sentiment_score}
+                    </div>
+                    
+                    {/* Month label */}
+                    <div className="absolute bottom-0 transform translate-y-full mt-2">
+                      <span className={`text-xs ${isLatest ? 'font-bold text-pink-600' : 'text-gray-600'}`}>
+                        {monthName}
                       </span>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })}
             </div>
-          )}
+          </div>
+        </div>
+        
+        {/* Legend */}
+        <div className="flex justify-center items-center space-x-4 mt-8 text-xs">
+          <div className="flex items-center space-x-1">
+            <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+            <span className="text-gray-600">Positive ({'>'}20)</span>
+          </div>
+          <div className="flex items-center space-x-1">
+            <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+            <span className="text-gray-600">Neutral (0-20)</span>
+          </div>
+          <div className="flex items-center space-x-1">
+            <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+            <span className="text-gray-600">Negative ({'<'}0)</span>
+          </div>
+        </div>
+      </div>
+      
+      {/* Monthly Breakdown */}
+      <details className="mt-4">
+        <summary className="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900">
+          View Monthly Details
+        </summary>
+        <div className="mt-3 space-y-2">
+          {sentimentData.timeAnalysis.map((month, index) => {
+            const monthName = new Date(month.month + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+            const isLatest = index === sentimentData.timeAnalysis.length - 1;
+            
+            return (
+              <div key={month.month} className={`flex items-center justify-between p-3 rounded-lg ${
+                isLatest ? 'bg-pink-50 border border-pink-200' : 'bg-gray-50'
+              }`}>
+                <div className="flex items-center space-x-3">
+                  <span className="text-sm text-gray-700 font-medium">{monthName}</span>
+                  {isLatest && (
+                    <span className="px-2 py-0.5 bg-pink-100 text-pink-800 text-xs rounded-full">
+                      Latest
+                    </span>
+                  )}
+                </div>
+                
+                <div className="flex items-center space-x-3">
+                  <span className="text-xs text-gray-600">{month.totalComments} comments</span>
+                  <span className={`text-sm font-bold px-2 py-1 rounded-full ${
+                    month.sentiment_score > 20 ? 'bg-green-100 text-green-700' :
+                    month.sentiment_score > 0 ? 'bg-blue-100 text-blue-700' : 
+                    'bg-red-100 text-red-700'
+                  }`}>
+                    {month.sentiment_score > 0 ? '+' : ''}{month.sentiment_score}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </details>
+      
+      {/* Insights */}
+      <div className="mt-4 bg-pink-50 rounded-lg p-3 border border-pink-200">
+        <p className="text-sm text-pink-800">
+          <strong>💡 Insight:</strong> {
+            sentimentData.timeAnalysis.length === 1 
+              ? 'This is your first month of sentiment tracking. Keep posting to build trend data!'
+              : sentimentData.insights.sentimentTrend === 'improving'
+              ? `Your audience sentiment has been improving! Your ${sentimentData.insights.bestContentType || 'recent content'} is resonating well.`
+              : sentimentData.insights.sentimentTrend === 'declining'
+              ? 'Consider adjusting your content strategy to better align with what your audience enjoyed in previous months.'
+              : 'Your sentiment remains stable. Try experimenting with new content types to boost positive reactions.'
+          }
+        </p>
+      </div>
+    </div>
+  </ViewTracker>
+)}
         </>
       ) : (
         <div className="bg-white rounded-xl p-6 border border-gray-200 text-center">
@@ -6176,7 +7348,7 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
     );
   };
 
-  const ProfileContent = () => {
+  const ProfileContent = ({ user }: { user?: any }) => {
   const [showAbout, setShowAbout] = useState(false);
   const [showHelpSupport, setShowHelpSupport] = useState(false);
   const [isDisconnectingInstagram, setIsDisconnectingInstagram] = useState(false);
@@ -6268,6 +7440,11 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
   if (showDataManagement) {
     return <AccountDataManagement onBack={() => setShowDataManagement(false)} />;
   }
+
+  // Show email preferences if requested
+if (showEmailPreferences) {
+  return <EmailPreferences userId={user?.id || ''} onClose={() => setShowEmailPreferences(false)} />;
+}
 
   const AboutModal = () => (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -6571,14 +7748,14 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
             <h3 className="font-semibold text-gray-900 mb-3">Settings</h3>
             <div className="space-y-3">
               {[
-                { name: 'Notifications', clickable: false },
-                { name: 'Account Data Management', clickable: true, action: () => setShowDataManagement(true), new: true },
-                { name: 'Privacy Policy', clickable: true, action: () => window.open('/privacy', '_blank') },
-                { name: 'Terms of Service', clickable: true, action: () => window.open('/terms', '_blank') },
-                { name: 'Billing', clickable: false },
-                { name: 'Help & Support', clickable: true, action: () => setShowHelpSupport(true) },
-                { name: 'About', clickable: true, action: () => setShowAbout(true) }
-              ].map((setting) => (
+  { name: 'Email Preferences', clickable: true, action: () => setShowEmailPreferences(true), new: true },
+  { name: 'Account Data Management', clickable: true, action: () => setShowDataManagement(true) },
+  { name: 'Privacy Policy', clickable: true, action: () => window.open('/privacy', '_blank') },
+  { name: 'Terms of Service', clickable: true, action: () => window.open('/terms', '_blank') },
+  { name: 'Billing', clickable: false },
+  { name: 'Help & Support', clickable: true, action: () => setShowHelpSupport(true) },
+  { name: 'About', clickable: true, action: () => setShowAbout(true) }
+].map((setting) => (
                 <ClickTracker
                   key={setting.name}
                   featureName={`profile_setting_${setting.name.toLowerCase().replace(/\s+/g, '_')}`}
@@ -6605,9 +7782,16 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
                   </button>
                 </ClickTracker>
               ))}
-            </div>
-          </div>
-        </ViewTracker>
+           {/* 🆕 NEW: Add the onboarding trigger */}
+      <div className="pt-3 border-t border-gray-200">
+        <OnboardingTrigger 
+  userId={user?.id} 
+  analytics={{ track: trackEngagement }}
+/>
+      </div>
+    </div>
+  </div>
+</ViewTracker>
 
         {/* Enhanced Instagram Data Status */}
         {instagramData && (
@@ -6667,6 +7851,116 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
   );
 };
 
+// Add TaggingModal component RIGHT HERE (before renderContent function)
+  const TaggingModal = () => {
+    const [selectedCategory, setSelectedCategory] = useState<string>('');
+    const [newCategoryName, setNewCategoryName] = useState('');
+
+    const handleSubmit = () => {
+  if (!selectedCategory && !newCategoryName) return;
+  
+  const category = newCategoryName.trim() || selectedCategory;
+  const isCustom = !!newCategoryName.trim(); // FIXED: Custom if newCategoryName exists
+  
+  console.log('🏷️ Submitting tag:', { category, isCustom }); // Debug log
+  
+  handleTagPosts(selectedPostsForTagging, category, isCustom);
+};
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl max-w-md w-full max-h-[80vh] overflow-y-auto">
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-gray-900">Tag Content</h3>
+            <button 
+              onClick={() => {
+                setShowTaggingModal(false);
+                setSelectedPostsForTagging([]);
+                setSelectedCategory('');
+                setNewCategoryName('');
+              }}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          
+          <div className="p-4">
+            <div className="bg-blue-50 rounded-lg p-3 mb-4">
+              <p className="text-sm font-medium text-blue-900">
+                Tagging {selectedPostsForTagging.length} post{selectedPostsForTagging.length > 1 ? 's' : ''}
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <h4 className="font-medium text-gray-900 mb-3">Select Category</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  {instagramData?.availableCategories?.map((category) => (
+                    <button
+                      key={category.id}
+                      onClick={() => {
+                        setSelectedCategory(category.name);
+                        setNewCategoryName('');
+                      }}
+                      className={`p-3 rounded-lg border-2 transition-all ${
+                        selectedCategory === category.name
+                          ? 'border-indigo-500 bg-indigo-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="text-center">
+                        <div className="text-2xl mb-1">{category.emoji}</div>
+                        <div className="text-xs font-medium text-gray-900">{category.name}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-gray-200 pt-4">
+                <h4 className="font-medium text-gray-900 mb-3">Or Create New Category</h4>
+                <input
+                  type="text"
+                  placeholder="e.g., Product Reviews, Case Studies..."
+                  value={newCategoryName}
+                  onChange={(e) => {
+                    setNewCategoryName(e.target.value);
+                    if (e.target.value.trim()) {
+                      setSelectedCategory('');
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowTaggingModal(false);
+                  setSelectedPostsForTagging([]);
+                  setSelectedCategory('');
+                  setNewCategoryName('');
+                }}
+                className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!selectedCategory && !newCategoryName.trim()}
+                className="flex-1 py-2 px-4 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Tag {selectedPostsForTagging.length} Post{selectedPostsForTagging.length > 1 ? 's' : ''}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
@@ -6678,7 +7972,7 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
       case 'notifications':
         return <NotificationsContent />;
       case 'profile':
-        return <ProfileContent />;
+        return <ProfileContent user={user} />;
       default:
         return <DashboardContent />;
     }
@@ -6688,6 +7982,9 @@ const PerformanceBar: React.FC<PerformanceBarProps> = ({ label, value, maxValue,
     <div className="w-full min-h-screen bg-white">
 
       {renderContent()}
+
+      {/* Tagging Modal */}
+      {showTaggingModal && <TaggingModal />}
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 flex justify-around items-center z-50 safe-area-bottom">
         {[

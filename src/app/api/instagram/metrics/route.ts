@@ -2,6 +2,491 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
+// Add this function RIGHT AFTER the imports at the top of the file
+async function savePostsToDatabase(supabase: any, instagramAccountId: string, posts: any[]) {
+  console.log(`💾 Saving ${posts.length} posts to database with real metrics...`)
+  
+  const today = new Date().toISOString().split('T')[0]
+  
+  const postsToSave = posts.map(post => ({
+    instagram_account_id: instagramAccountId,
+    instagram_post_id: post.id,
+    snapshot_date: today,
+    post_type: post.media_type || 'IMAGE',
+    caption: post.caption || '',
+    permalink: post.permalink || '',
+    media_url: post.media_url || '',
+    thumbnail_url: post.thumbnail_url || '',
+    published_at: post.timestamp || null,
+    likes_count: post.like_count || 0,
+    comments_count: post.comments_count || 0,
+    shares_count: post.insights?.shares || 0,
+    saves_count: post.insights?.saved || 0,
+    reach: post.insights?.reach || post.reach || 0,
+    impressions: post.insights?.views || post.impressions || 0,
+    raw_post_data: post,
+    raw_insights_data: post.insights || null
+  }))
+
+  // Use upsert to update existing posts or create new ones
+  const { error } = await supabase
+    .from('post_snapshots')
+    .upsert(postsToSave, {
+      onConflict: 'instagram_account_id,instagram_post_id,snapshot_date',
+      ignoreDuplicates: false // Allow updates to get latest data
+    })
+
+  if (error) {
+    console.error('❌ Error saving posts to database:', error)
+  } else {
+    console.log(`✅ Saved ${posts.length} posts with real Instagram metrics`)
+  }
+}
+
+// Content Categorization Helper Functions
+async function getCategorizationData(supabase: any, userId: string, accountIds: string[], recentPosts: any[]) {
+  try {
+    if (!recentPosts || recentPosts.length === 0) {
+      return {
+        categoryStats: [],
+        formatStats: [],
+        crossAnalysisStats: [],
+        taggingProgress: { totalPosts: 0, taggedPosts: 0, untaggedPosts: 0, completionPercentage: 0 },
+        untaggedPosts: [],
+        availableCategories: [],
+        topPerformers: { category: null, format: null },
+        unlockedFeatures: { basicInsights: false, timingAnalysis: false, crossAnalysis: false, fullStrategy: false }
+      }
+    }
+
+    // 🔥 NEW: ALWAYS calculate format stats from raw Instagram data (independent of tagging)
+    const calculateFormatStats = (posts: any[]) => {
+      // Group posts by media type
+      const typeGroups = new Map();
+      
+      posts.forEach(post => {
+        let type = 'Post';
+        if (post.media_type === 'VIDEO') type = 'Reels';
+        else if (post.media_type === 'CAROUSEL_ALBUM') type = 'Carousels';
+        
+        if (!typeGroups.has(type)) {
+          typeGroups.set(type, {
+            posts: [],
+            totalLikes: 0,
+            totalComments: 0,
+            totalReach: 0,
+            totalSaves: 0,
+            totalImpressions: 0
+          });
+        }
+        
+        const group = typeGroups.get(type);
+        group.posts.push(post);
+        group.totalLikes += post.like_count || 0;
+        group.totalComments += post.comments_count || 0;
+        group.totalReach += post.reach || 0;
+        group.totalSaves += post.saves || 0;
+        group.totalImpressions += post.impressions || 0;
+      });
+
+      // Convert to format stats array
+      return Array.from(typeGroups.entries()).map(([type, data]) => {
+        const count = data.posts.length;
+        return {
+          post_type: type,
+          count,
+          avg_likes: count > 0 ? Math.round(data.totalLikes / count) : 0,
+          avg_comments: count > 0 ? Math.round(data.totalComments / count) : 0,
+          avg_reach: count > 0 ? Math.round(data.totalReach / count) : 0,
+          avg_impressions: count > 0 ? Math.round(data.totalImpressions / count) : 0,
+          engagement_rate: count > 0 ? 
+            (((data.totalLikes + data.totalComments) / Math.max(data.totalReach, 1)) * 100).toFixed(1) + '%' : '0%',
+          total_engagement: data.totalLikes + data.totalComments
+        };
+      }).sort((a, b) => b.total_engagement - a.total_engagement);
+    };
+
+    // Get available categories from database
+const { data: availableCategories } = await supabase
+  .from('content_categories')
+  .select('*')
+  .order('name')
+
+// Get user's Instagram account ID
+const { data: userAccount } = await supabase
+  .from('instagram_accounts')
+  .select('id')
+  .eq('user_id', userId)
+  .eq('is_active', true)
+  .single()
+
+if (!userAccount) {
+  console.log('No active Instagram account found for user')
+  return {
+    categoryStats: [],
+    formatStats: calculateFormatStats(recentPosts), // Keep format stats working
+    crossAnalysisStats: [],
+    taggingProgress: { 
+      totalPosts: recentPosts.length, // Use API count
+      taggedPosts: 0, 
+      untaggedPosts: recentPosts.length, 
+      completionPercentage: 0 
+    },
+    untaggedPosts: recentPosts.slice(0, 20).map(post => ({
+      id: post.id,
+      instagram_post_id: post.id,
+      caption: post.caption || 'No caption',
+      post_type: post.media_type,
+      published_at: post.timestamp,
+      likes_count: post.like_count || 0,
+      comments_count: post.comments_count || 0,
+      reach: post.reach || 0,
+      media_url: post.media_url,
+      thumbnail_url: post.thumbnail_url
+    })),
+    availableCategories: availableCategories || [],
+    topPerformers: { 
+      category: null, 
+      format: calculateFormatStats(recentPosts).length > 0 ? calculateFormatStats(recentPosts)[0] : null
+    },
+    unlockedFeatures: { 
+      basicInsights: false, 
+      timingAnalysis: false, 
+      crossAnalysis: false, 
+      fullStrategy: false 
+    }
+  }
+}
+
+// Get post IDs from the API data (source of truth)
+const recentPostIds = recentPosts.map(post => post.id)
+
+// Get only the tagging information from database for THESE SPECIFIC POSTS
+const { data: taggedPostsData } = await supabase
+  .from('post_snapshots')
+  .select('instagram_post_id, content_category, is_tagged')
+  .eq('instagram_account_id', userAccount.id)
+  .eq('is_tagged', true)
+  .not('content_category', 'is', null)
+  .in('instagram_post_id', recentPostIds)
+
+// Create a map of tagged posts for quick lookup
+const taggedPostsMap = new Map()
+taggedPostsData?.forEach((taggedPost: any) => {
+  taggedPostsMap.set(taggedPost.instagram_post_id, taggedPost.content_category)
+})
+
+// Use API data as source of truth, just add tagging info
+const taggedPosts = recentPostIds.filter(postId => taggedPostsMap.has(postId)).length
+const totalPosts = recentPosts.length // Always use API count
+const completionPercentage = totalPosts > 0 ? Math.round((taggedPosts / totalPosts) * 100) : 0
+
+console.log(`📊 UNIFIED count - Total: ${totalPosts}, Tagged: ${taggedPosts}, Percentage: ${completionPercentage}%`)
+
+// Filter untagged posts from API data
+const untaggedPosts = recentPosts
+  .filter(post => !taggedPostsMap.has(post.id))
+  .slice(0, 20)
+  .map(post => ({
+    id: post.id,
+    instagram_post_id: post.id,
+    caption: post.caption || 'No caption',
+    post_type: post.media_type,
+    published_at: post.timestamp,
+    likes_count: post.like_count || 0,
+    comments_count: post.comments_count || 0,
+    reach: post.reach || 0,
+    media_url: post.media_url,
+    thumbnail_url: post.thumbnail_url
+  }))
+
+// Generate category stats using API data + tagging info
+const categoryStats: {
+  category: string,
+  count: number,
+  avgLikes: number,
+  avgComments: number,
+  avgReach: number,
+  avgEngagement: number,
+  posts: any[]
+}[] = []
+if (taggedPostsData && taggedPostsData.length > 0) {
+  const categoryGroups = new Map()
+  
+  // Use API posts as source of truth, add category info
+  recentPosts.forEach(post => {
+    const category = taggedPostsMap.get(post.id)
+    if (!category) return
+    
+    if (!categoryGroups.has(category)) {
+      categoryGroups.set(category, {
+        posts: [],
+        totalLikes: 0,
+        totalComments: 0,
+        totalReach: 0
+      })
+    }
+    
+    const group = categoryGroups.get(category)
+    group.posts.push(post)
+    group.totalLikes += post.like_count || 0
+    group.totalComments += post.comments_count || 0
+    group.totalReach += post.reach || 0
+  })
+  
+  // Convert to stats array
+  categoryGroups.forEach((data, category) => {
+    const count = data.posts.length
+    const avgLikes = Math.round(data.totalLikes / count)
+    const avgComments = Math.round(data.totalComments / count)
+    const avgReach = Math.round(data.totalReach / count)
+    const avgEngagement = avgLikes + avgComments
+    
+    categoryStats.push({
+  category,
+  count,
+  avgLikes,
+  avgComments,
+  avgReach,
+  avgEngagement,
+  posts: data.posts
+})
+  })
+  
+  // Sort by performance
+  categoryStats.sort((a, b) => b.avgEngagement - a.avgEngagement)
+}
+
+// Progressive unlocks
+const unlockedFeatures = {
+  basicInsights: taggedPosts >= 5,
+  timingAnalysis: taggedPosts >= 15,
+  crossAnalysis: taggedPosts >= 25,
+  fullStrategy: completionPercentage >= 100
+}
+
+// 🔥 CALCULATE FORMAT STATS IMMEDIATELY - NO TAGGING REQUIRED
+const formatStats = calculateFormatStats(recentPosts);
+
+// Find top performing format for insights
+const topFormat = formatStats.length > 0 ? formatStats[0] : null;
+
+console.log('📊 Format stats calculated:', formatStats.length, 'format types found');
+
+// Calculate cross-analysis stats (category × format combinations)
+const crossAnalysisStats: {
+  content_category: string;
+  post_type: string;
+  count: number;
+  avg_likes: number;
+  avg_comments: number;
+  avg_reach: number;
+  avg_impressions: number;
+}[] = [];
+
+// Always try to generate cross-analysis if we have tagged posts
+if (taggedPosts > 0) {
+  const categoryFormatCombinations = new Map();
+  
+  // Group posts by category + format combination
+  recentPosts.forEach(post => {
+    const category = taggedPostsMap.get(post.id);
+    if (category) {
+      const key = `${category}-${post.media_type}`;
+      
+      if (!categoryFormatCombinations.has(key)) {
+        categoryFormatCombinations.set(key, {
+          content_category: category,
+          post_type: post.media_type,
+          posts: [],
+          totalLikes: 0,
+          totalComments: 0,
+          totalReach: 0,
+          totalImpressions: 0
+        });
+      }
+      
+      const combination = categoryFormatCombinations.get(key);
+      combination.posts.push(post);
+      combination.totalLikes += post.like_count || 0;
+      combination.totalComments += post.comments_count || 0;
+      combination.totalReach += post.reach || 0;
+      combination.totalImpressions += post.impressions || 0;
+    }
+  });
+  
+  // Convert to stats (same format as your category and format stats)
+  Array.from(categoryFormatCombinations.values())
+    .filter(combo => combo.posts.length >= 2) // Need at least 2 posts for reliable data
+    .forEach(combo => {
+      const count = combo.posts.length;
+      crossAnalysisStats.push({
+        content_category: combo.content_category,
+        post_type: combo.post_type,
+        count: count,
+        avg_likes: count > 0 ? Math.round(combo.totalLikes / count) : 0,
+        avg_comments: count > 0 ? Math.round(combo.totalComments / count) : 0,
+        avg_reach: count > 0 ? Math.round(combo.totalReach / count) : 0,
+        avg_impressions: count > 0 ? Math.round(combo.totalImpressions / count) : 0
+      });
+    });
+  
+  // Sort by total engagement (highest first) - same as your other views
+  crossAnalysisStats.sort((a, b) => (b.avg_likes + b.avg_comments) - (a.avg_likes + a.avg_comments));
+}
+
+return {
+  categoryStats: categoryStats.map(cat => ({
+    content_category: cat.category,
+    count: cat.count,
+    avg_likes: cat.avgLikes,
+    avg_comments: cat.avgComments,
+    avg_reach: cat.avgReach,
+    avg_impressions: 0
+  })),
+  formatStats,
+  crossAnalysisStats,    // ← Changed from crossAnalysisStats: [] to crossAnalysisStats
+  taggingProgress: {
+    totalPosts,
+    taggedPosts,
+    untaggedPosts: totalPosts - taggedPosts,
+    completionPercentage
+  },
+  untaggedPosts,
+  availableCategories: availableCategories || [],
+  topPerformers: { 
+    category: categoryStats.length > 0 ? categoryStats[0] : null, 
+    format: topFormat
+  },
+  unlockedFeatures
+}
+
+  } catch (error) {
+    console.error('❌ Categorization data error:', error)
+    return {
+      categoryStats: [],
+      formatStats: [],
+      crossAnalysisStats: [],
+      taggingProgress: { totalPosts: 0, taggedPosts: 0, untaggedPosts: 0, completionPercentage: 0 },
+      untaggedPosts: [],
+      availableCategories: [],
+      topPerformers: { category: null, format: null },
+      unlockedFeatures: { basicInsights: false, timingAnalysis: false, crossAnalysis: false, fullStrategy: false }
+    }
+  }
+}
+
+async function handleTaggingOperation(supabase: any, userId: string, requestBody: any) {
+  console.log('🔍🔍🔍 handleTaggingOperation called:', { userId, requestBody }) // ADD THIS LINE
+  
+  try {
+    const { action, postIds, category, isCustomCategory = false } = requestBody
+
+    // Collect debug info to return to client
+    const debugInfo: any = {
+      receivedUserId: userId,
+      expectedUserId: 'fd4e663c-ba62-43ce-a8e2-6527285cd491',
+      postIds: postIds,
+      category: category
+    }
+
+    if (!action || !postIds || !Array.isArray(postIds)) {
+      return { error: 'Invalid request data', status: 400, debug: debugInfo }
+    }
+
+    if (action === 'tag') {
+      if (!category) {
+        return { error: 'Category required for tagging', status: 400, debug: debugInfo }
+      }
+
+      // Get user's Instagram account
+      const { data: userAccount, error: accountError } = await supabase
+        .from('instagram_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .single()
+
+      debugInfo.userAccountLookup = {
+        userAccount: userAccount,
+        accountError: accountError,
+        searchedUserId: userId
+      }
+
+      if (!userAccount) {
+        return { 
+          error: 'No active Instagram account found', 
+          status: 404,
+          debug: debugInfo
+        }
+      }
+
+      // If it's a custom category, add it to the categories table
+      if (isCustomCategory) {
+        await supabase
+          .from('content_categories')
+          .upsert({ 
+            name: category, 
+            emoji: '🏷️',
+            color_scheme: {"bg": "from-gray-50 to-gray-100", "border": "border-gray-200", "text": "text-gray-700"},
+            is_default: false 
+          })
+      }
+
+      // Try to update the posts
+      const { data: updatedData, error: updateError } = await supabase
+        .from('post_snapshots')
+        .update({
+          content_category: category,
+          is_tagged: true,
+          tagged_at: new Date().toISOString(),
+          tagged_by: userId
+        })
+        .eq('instagram_account_id', userAccount.id)
+        .in('instagram_post_id', postIds)
+        .select('id, instagram_post_id, content_category')
+
+      debugInfo.updateResult = {
+        updatedData: updatedData,
+        updateError: updateError,
+        updatedCount: updatedData?.length || 0
+      }
+
+      if (updateError) {
+        return { 
+          error: `Database error: ${updateError.message}`, 
+          status: 500,
+          debug: debugInfo
+        }
+      }
+
+      const actuallyUpdated = updatedData?.length || 0
+
+      if (actuallyUpdated === 0) {
+        return { 
+          error: 'No posts could be tagged', 
+          status: 400,
+          debug: debugInfo // This will show us exactly what went wrong
+        }
+      }
+
+      return { 
+        success: true, 
+        action: 'tagged',
+        updatedPosts: actuallyUpdated,
+        category,
+        debug: debugInfo
+      }
+    }
+
+    return { error: 'Invalid action', status: 400, debug: debugInfo }
+
+  } catch (error) {
+    console.error('❌ Tagging operation error:', error)
+    return { error: 'Failed to process tagging request', status: 500 }
+  }
+}
+
 // Enhanced interface for Instagram insights
 interface MediaInsights {
   reach: number;
@@ -1087,6 +1572,7 @@ export async function GET(request: NextRequest) {
         }
         
         console.log('✅ Extended insights and comments processing complete for', postsWithInsights.length, 'posts')
+        await savePostsToDatabase(supabase, instagramAccount.id, postsWithInsights)
         
         // EXTENDED: Analyze top followers from comprehensive comment data
         topFollowers = analyzeTopFollowers(postsWithInsights, profileData.username || instagramAccount.username)
@@ -1423,7 +1909,14 @@ export async function GET(request: NextRequest) {
       apiType: result.insights.apiType
     })
 
-    return NextResponse.json(result)
+    // Add categorization data before returning
+console.log('📊 Adding categorization data...')
+const categorizationData = await getCategorizationData(supabase, user.id, [instagramAccount.id], result.recentPosts || [])
+
+return NextResponse.json({
+  ...result,  // All your existing Instagram data
+  ...categorizationData  // Complete categorization system
+})
 
   } catch (error) {
     console.error('❌ Enhanced Instagram metrics error:', error)
@@ -1434,4 +1927,91 @@ export async function GET(request: NextRequest) {
   }
 }
 
+// Helper functions for cross-analysis (add these RIGHT HERE before the exports)
+function getCategoryEmoji(category: string) {
+  const emojiMap = {
+    'Tutorial': '📚',
+    'Behind the Scenes': '🎬',
+    'Product Demo': '🛍️',
+    'Lifestyle': '✨',
+    'Tips': '💡',
+    'Story': '📖',
+    'News': '📰',
+    'Review': '⭐',
+    'Entertainment': '🎭',
+    'Educational': '🎓'
+  };
+  return emojiMap[category as keyof typeof emojiMap] || '📝';
+}
+
+function getFormatEmoji(format: string) {
+  const emojiMap = {
+    'VIDEO': '🎬',
+    'CAROUSEL_ALBUM': '📸',
+    'IMAGE': '🖼️',
+    'Reels': '🎬',
+    'Posts': '📝',
+    'Carousels': '📸'
+  };
+  return emojiMap[format as keyof typeof emojiMap] || '📄';
+}
+
+function getFormatType(mediaType: string) {
+  switch (mediaType) {
+    case 'VIDEO':
+      return 'Reels';
+    case 'CAROUSEL_ALBUM':
+      return 'Carousels';
+    case 'IMAGE':
+    default:
+      return 'Posts';
+  }
+}
+
 export const dynamic = 'force-dynamic'
+
+// Add this POST method to handle tagging operations
+export async function POST(request: NextRequest) {
+  try {
+    const cookieStore = await cookies()
+    
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value
+          },
+          set(name: string, value: string, options: CookieOptions) {},
+          remove(name: string, options: CookieOptions) {},
+        },
+      }
+    )
+    
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const requestBody = await request.json()
+    console.log('🔍 POST handler - Request body:', requestBody) // Add this debug
+    
+    const result = await handleTaggingOperation(supabase, user.id, requestBody)
+
+    console.log('🔍 POST handler - Result:', result) // Add this debug
+
+    if (result.error) {
+      return NextResponse.json(result, { status: result.status || 500 }) // Return COMPLETE result with debug
+    }
+
+    return NextResponse.json(result)
+
+  } catch (error) {
+    console.error('❌ Instagram tagging API error:', error)
+    return NextResponse.json({ 
+      error: 'Failed to process tagging request' 
+    }, { status: 500 })
+  }
+}
