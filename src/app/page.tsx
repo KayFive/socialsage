@@ -22,6 +22,7 @@ export default function HomePage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
+  const [authSuccess, setAuthSuccess] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
 
   // Data management state
@@ -138,6 +139,7 @@ export default function HomePage() {
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault()
     setAuthError('')
+    setAuthSuccess('')
     setAuthLoading(true)
 
     if (!email || !password) {
@@ -163,7 +165,7 @@ export default function HomePage() {
         if (error) throw error
         
         if (data?.user && !data.session) {
-          setAuthError('Please check your email and click the confirmation link to complete signup.')
+          setAuthSuccess('Please check your email and click the confirmation link to complete signup.')
           
           // ✅ NEW: Track signup confirmation needed
           analytics.track('Signup - Email Confirmation Required', {
@@ -230,6 +232,26 @@ if (data?.user) {
       setAuthLoading(false)
     }
   }
+
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setAuthError('Please enter your email address first');
+      return;
+    }
+    
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/reset-password`,
+      });
+      
+      if (error) throw error;
+      
+      setAuthError('Check your email for password reset instructions');
+      analytics.track('Password Reset Requested', { email });
+    } catch (error: any) {
+      setAuthError(error.message || 'Failed to send reset email');
+    }
+  };
 
   const handleConnectInstagram = () => {
     console.log('📸 Starting Instagram connection...')
@@ -401,7 +423,7 @@ if (data?.user) {
                   placeholder="Email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
                   required
                 />
               </div>
@@ -412,15 +434,34 @@ if (data?.user) {
                   placeholder="Password (min 6 characters)"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
                   minLength={6}
                   required
                 />
               </div>
 
+              {/* Forgot Password Link - only show for Sign In */}
+              {!isSignUp && (
+                <div className="text-right">
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="text-sm text-blue-600 hover:text-blue-800 underline"
+                  >
+                    Forgot your password?
+                  </button>
+                </div>
+              )}
+
               {authError && (
                 <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded-lg">
                   {authError}
+                </div>
+              )}
+
+              {authSuccess && (
+                <div className="text-blue-600 text-sm text-center bg-blue-50 p-2 rounded-lg border border-blue-200">
+                  {authSuccess}
                 </div>
               )}
 
