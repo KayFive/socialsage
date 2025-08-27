@@ -148,6 +148,16 @@ export default function HomePage() {
       return
     }
 
+    // Validate password for signup only
+    if (isSignUp) {
+      const passwordError = validatePassword(password);
+      if (passwordError) {
+        setAuthError(passwordError);
+        setAuthLoading(false);
+        return;
+      }
+    }
+
     // ✅ NEW: Track auth attempt start
     analytics.track('Auth Attempt Started', {
       auth_type: isSignUp ? 'signup' : 'signin',
@@ -251,6 +261,22 @@ if (data?.user) {
     } catch (error: any) {
       setAuthError(error.message || 'Failed to send reset email');
     }
+  };
+
+  const validatePassword = (password: string) => {
+    if (password.length < 8) {
+      return 'Password must be at least 8 characters';
+    }
+    if (!/[A-Z]/.test(password)) {
+      return 'Password must contain at least one uppercase letter';
+    }
+    if (!/[a-z]/.test(password)) {
+      return 'Password must contain at least one lowercase letter';
+    }
+    if (!/[0-9]/.test(password)) {
+      return 'Password must contain at least one number';
+    }
+    return null; // Valid password
   };
 
   const handleConnectInstagram = () => {
@@ -431,11 +457,11 @@ if (data?.user) {
               <div>
                 <input
                   type="password"
-                  placeholder="Password (min 6 characters)"
+                  placeholder="Password (8+ chars, uppercase, lowercase, number)"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-                  minLength={6}
+                  minLength={8}
                   required
                 />
               </div>
