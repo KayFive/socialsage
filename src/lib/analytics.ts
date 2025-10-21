@@ -1,4 +1,4 @@
-// src/lib/analytics.ts - Fixed Mixpanel initialization, preserving ALL existing functionality
+// src/lib/analytics.ts - EXACTLY MATCHED to your Supabase schema
 
 import { createClient } from '@supabase/supabase-js'
 
@@ -32,10 +32,6 @@ export const ONBOARDING_EVENTS = {
 
 class AnalyticsService {
   private mixpanel: any = null
-  private supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
   private sessionId: string = ''
   private sessionStart: Date = new Date()
   private pagesVisited: number = 0
@@ -59,14 +55,13 @@ class AnalyticsService {
 
         console.log('📥 Loading Mixpanel...')
         
-        // ✅ FIXED: Proper dynamic import handling
         const mixpanelModule = await import('mixpanel-browser')
         const mixpanel = mixpanelModule.default || mixpanelModule
         
         if (mixpanel && typeof mixpanel.init === 'function') {
           mixpanel.init(token, {
             debug: process.env.NODE_ENV === 'development',
-            track_pageview: false, // We'll handle this manually
+            track_pageview: false,
             persistence: 'localStorage'
           })
           
@@ -79,7 +74,6 @@ class AnalyticsService {
       } catch (error) {
         console.error('❌ Mixpanel failed to initialize:', error)
         console.log('📊 Analytics will continue with Supabase-only tracking')
-        // Don't throw - let the app continue with Supabase tracking only
       }
     }
   }
@@ -91,17 +85,39 @@ class AnalyticsService {
       this.pagesVisited = 0
       this.actionsCount = 0
 
-      // Track page visibility for session duration
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
           this.endSession()
         }
       })
 
-      // Track session end on beforeunload
       window.addEventListener('beforeunload', () => {
         this.endSession()
       })
+    }
+  }
+
+  private async sendToAPI(type: string, data: any) {
+    try {
+      console.log(`📊 Sending ${type} to analytics API:`, data)
+      
+      const response = await fetch('/api/analytics', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ type, data }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Failed to send ${type}`)
+      }
+
+      console.log(`✅ ${type} sent successfully`)
+      return await response.json()
+    } catch (error) {
+      console.error(`❌ Failed to track ${type}:`, error)
     }
   }
 
@@ -109,7 +125,6 @@ class AnalyticsService {
   async identifyUser(userProperties: UserProperties) {
     const { userId, ...properties } = userProperties
 
-    // Mixpanel identification (only if initialized)
     if (this.mixpanel && this.mixpanelInitialized) {
       try {
         this.mixpanel.identify(userId)
@@ -119,19 +134,17 @@ class AnalyticsService {
       }
     }
 
-    // Store in Supabase (only if we have service role key)
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('user_analytics').upsert({
-          user_id: userId,
-          ...this.getLocationData(),
-          ...this.getDeviceData(),
-          ...properties
-        })
-      } catch (error) {
-        console.error('Failed to store user analytics:', error)
-      }
-    }
+    // Send data matching user_analytics schema
+    await this.sendToAPI('user_identify', {
+      user_id: userId,
+      country: null,
+      state: null,
+      city: null,
+      device_type: this.getDeviceType(),
+      browser: this.getBrowser(),
+      os: this.getOS(),
+      ...properties
+    })
   }
 
   async trackSignup(userId: string, signupData: {
@@ -139,6 +152,7 @@ class AnalyticsService {
     referralUrl?: string
     utmParams?: Record<string, string>
   }) {
+    // Data matching user_analytics schema exactly
     const eventData = {
       user_id: userId,
       signup_timestamp: new Date().toISOString(),
@@ -149,31 +163,21 @@ class AnalyticsService {
       utm_campaign: signupData.utmParams?.utm_campaign,
       utm_content: signupData.utmParams?.utm_content,
       utm_term: signupData.utmParams?.utm_term,
-      ...this.getLocationData(),
-      ...this.getDeviceData()
+      country: null,
+      state: null,
+      city: null,
+      device_type: this.getDeviceType(),
+      browser: this.getBrowser(),
+      os: this.getOS()
     }
 
-    // Track in Mixpanel
     this.track('User Signup', {
       source: signupData.source,
       referral_url: signupData.referralUrl,
       ...signupData.utmParams
     }, userId)
 
-    // Store in Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('user_analytics').insert(eventData)
-        
-        // Initialize retention tracking
-        await this.supabase.from('user_retention_snapshots').insert({
-          user_id: userId,
-          signup_date: new Date().toISOString().split('T')[0]
-        })
-      } catch (error) {
-        console.error('Failed to track signup:', error)
-      }
-    }
+    await this.sendToAPI('signup', eventData)
   }
 
   // SESSION TRACKING
@@ -182,24 +186,18 @@ class AnalyticsService {
     this.pagesVisited = 0
     this.actionsCount = 0
 
+    // Data matching user_sessions schema exactly
     const sessionData = {
       user_id: userId,
       session_id: this.sessionId,
       session_start: this.sessionStart.toISOString(),
-      ...this.getLocationData(),
-      ...this.getDeviceData()
+      country: null,
+      city: null,
+      device_type: this.getDeviceType()
     }
 
-    // Store in Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('user_sessions').insert(sessionData)
-      } catch (error) {
-        console.error('Failed to start session:', error)
-      }
-    }
+    await this.sendToAPI('session_start', sessionData)
 
-    // Track in Mixpanel
     this.track('Session Start', {
       session_id: this.sessionId
     }, userId)
@@ -209,24 +207,17 @@ class AnalyticsService {
     const sessionEnd = new Date()
     const duration = Math.round((sessionEnd.getTime() - this.sessionStart.getTime()) / 1000)
 
-    // Update Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase
-          .from('user_sessions')
-          .update({
-            session_end: sessionEnd.toISOString(),
-            duration_seconds: duration,
-            pages_visited: this.pagesVisited,
-            actions_taken: this.actionsCount
-          })
-          .eq('session_id', this.sessionId)
-      } catch (error) {
-        console.error('Failed to end session:', error)
-      }
+    // Data matching user_sessions schema exactly
+    const sessionData = {
+      session_id: this.sessionId,
+      session_end: sessionEnd.toISOString(),
+      duration_seconds: duration,
+      pages_visited: this.pagesVisited,
+      actions_taken: this.actionsCount
     }
 
-    // Track in Mixpanel
+    await this.sendToAPI('session_end', sessionData)
+
     this.track('Session End', {
       session_id: this.sessionId,
       duration_seconds: duration,
@@ -244,44 +235,36 @@ class AnalyticsService {
   ) {
     this.actionsCount++
 
+    // Data matching feature_usage schema exactly
     const eventData = {
       user_id: userId,
-      session_id: this.sessionId,
+      session_id: this.sessionId, // ✅ This column exists in your schema
       feature_name: featureName,
       action_type: actionType,
-      page_path: typeof window !== 'undefined' ? window.location.pathname : '',
-      metadata: metadata || {}
+      page_path: typeof window !== 'undefined' ? window.location.pathname : null, // ✅ This column exists
+      metadata: metadata || {},
+      timestamp: new Date().toISOString()
     }
 
-    // Track in Mixpanel
     this.track(`Feature ${actionType.charAt(0).toUpperCase() + actionType.slice(1)}`, {
       feature_name: featureName,
       action_type: actionType,
       ...metadata
     }, userId)
 
-    // Store in Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('feature_usage').insert(eventData)
-      } catch (error) {
-        console.error('Failed to track feature usage:', error)
-      }
-    }
+    await this.sendToAPI('feature_usage', eventData)
   }
 
   // PAGE VIEW TRACKING
   async trackPageView(pagePath: string, pageTitle?: string, userId?: string) {
     this.pagesVisited++
 
-    // Track in Mixpanel
     this.track('Page View', {
       page_path: pagePath,
       page_title: pageTitle,
       session_id: this.sessionId
     }, userId)
 
-    // Update feature usage for page views
     await this.trackFeatureUsage(
       this.getFeatureNameFromPath(pagePath),
       'view',
@@ -299,6 +282,7 @@ class AnalyticsService {
     completed: boolean = true,
     metadata?: Record<string, any>
   ) {
+    // Data matching conversion_funnels schema exactly
     const eventData = {
       user_id: userId,
       funnel_name: funnelName,
@@ -309,7 +293,6 @@ class AnalyticsService {
       metadata: metadata || {}
     }
 
-    // Track in Mixpanel
     this.track(`Funnel ${completed ? 'Step Completed' : 'Step Dropped'}`, {
       funnel_name: funnelName,
       step_name: stepName,
@@ -317,14 +300,7 @@ class AnalyticsService {
       ...metadata
     }, userId)
 
-    // Store in Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('conversion_funnels').insert(eventData)
-      } catch (error) {
-        console.error('Failed to track funnel step:', error)
-      }
-    }
+    await this.sendToAPI('funnel', eventData)
   }
 
   // ENGAGEMENT EVENTS
@@ -333,25 +309,18 @@ class AnalyticsService {
     userId?: string,
     properties?: Record<string, any>
   ) {
+    // Data matching engagement_events schema exactly
     const eventData = {
       user_id: userId,
       event_type: eventType,
-      event_properties: properties || {}
+      event_properties: properties || {},
+      timestamp: new Date().toISOString()
     }
 
-    // Track in Mixpanel
     this.track(eventType, properties, userId)
 
-    // Store in Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('engagement_events').insert(eventData)
-      } catch (error) {
-        console.error('Failed to track engagement:', error)
-      }
-    }
+    await this.sendToAPI('engagement', eventData)
 
-    // Update retention data for key events
     if (userId && ['login', 'instagram_connect', 'view_insights'].includes(eventType)) {
       await this.updateRetentionData(userId)
     }
@@ -366,6 +335,7 @@ class AnalyticsService {
     featureContext?: string,
     metadata?: Record<string, any>
   ) {
+    // Data matching user_feedback schema exactly
     const eventData = {
       user_id: userId,
       feedback_type: feedbackType,
@@ -375,7 +345,6 @@ class AnalyticsService {
       metadata: metadata || {}
     }
 
-    // Track in Mixpanel
     this.track('User Feedback', {
       feedback_type: feedbackType,
       score,
@@ -383,19 +352,11 @@ class AnalyticsService {
       ...metadata
     }, userId)
 
-    // Store in Supabase
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      try {
-        await this.supabase.from('user_feedback').insert(eventData)
-      } catch (error) {
-        console.error('Failed to track feedback:', error)
-      }
-    }
+    await this.sendToAPI('feedback', eventData)
   }
 
   // GENERIC EVENT TRACKING
   track(event: string, properties?: Record<string, any>, userId?: string) {
-    // ✅ FIXED: Added safety checks for Mixpanel
     if (this.mixpanel && this.mixpanelInitialized) {
       try {
         const eventProperties = {
@@ -403,7 +364,9 @@ class AnalyticsService {
           session_id: this.sessionId,
           timestamp: new Date().toISOString(),
           page_path: typeof window !== 'undefined' ? window.location.pathname : '',
-          ...this.getDeviceData()
+          device_type: this.getDeviceType(),
+          browser: this.getBrowser(),
+          os: this.getOS()
         }
 
         this.mixpanel.track(event, eventProperties)
@@ -414,36 +377,17 @@ class AnalyticsService {
   }
 
   // UTILITY METHODS
-  private getLocationData() {
-    // You can integrate with a service like IPGeolocation or MaxMind
-    // For now, return empty object
-    return {
-      country: null,
-      state: null,
-      city: null,
-      ip_address: null
-    }
-  }
-
-  private getDeviceData() {
-    if (typeof window === 'undefined') return {}
-
+  private getDeviceType(): string {
+    if (typeof window === 'undefined') return 'desktop'
     const userAgent = navigator.userAgent
-    return {
-      user_agent: userAgent,
-      device_type: this.getDeviceType(userAgent),
-      browser: this.getBrowser(userAgent),
-      os: this.getOS(userAgent)
-    }
-  }
-
-  private getDeviceType(userAgent: string): string {
     if (/tablet|ipad|playbook|silk/i.test(userAgent)) return 'tablet'
     if (/mobile|iphone|ipod|android|blackberry|opera|mini|windows\sce|palm|smartphone|iemobile/i.test(userAgent)) return 'mobile'
     return 'desktop'
   }
 
-  private getBrowser(userAgent: string): string {
+  private getBrowser(): string {
+    if (typeof window === 'undefined') return 'Unknown'
+    const userAgent = navigator.userAgent
     if (userAgent.includes('Chrome')) return 'Chrome'
     if (userAgent.includes('Firefox')) return 'Firefox'
     if (userAgent.includes('Safari')) return 'Safari'
@@ -451,7 +395,9 @@ class AnalyticsService {
     return 'Unknown'
   }
 
-  private getOS(userAgent: string): string {
+  private getOS(): string {
+    if (typeof window === 'undefined') return 'Unknown'
+    const userAgent = navigator.userAgent
     if (userAgent.includes('Windows')) return 'Windows'
     if (userAgent.includes('Mac')) return 'macOS'
     if (userAgent.includes('Linux')) return 'Linux'
@@ -470,35 +416,13 @@ class AnalyticsService {
   }
 
   private async updateRetentionData(userId: string) {
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return
-    
     const today = new Date().toISOString().split('T')[0]
     
     try {
-      // Get user's signup date
-      const { data: userAnalytics } = await this.supabase
-        .from('user_analytics')
-        .select('signup_timestamp')
-        .eq('user_id', userId)
-        .single()
-
-      if (!userAnalytics) return
-
-      const signupDate = new Date(userAnalytics.signup_timestamp)
-      const daysSinceSignup = Math.floor((new Date().getTime() - signupDate.getTime()) / (1000 * 60 * 60 * 24))
-
-      const updateData: any = {
+      await this.sendToAPI('retention_update', {
+        user_id: userId,
         last_active_date: today
-      }
-
-      if (daysSinceSignup === 1) updateData.day_1_active = true
-      if (daysSinceSignup === 7) updateData.day_7_active = true
-      if (daysSinceSignup === 30) updateData.day_30_active = true
-
-      await this.supabase
-        .from('user_retention_snapshots')
-        .update(updateData)
-        .eq('user_id', userId)
+      })
     } catch (error) {
       console.error('Failed to update retention data:', error)
     }
@@ -523,23 +447,23 @@ class AnalyticsService {
     return document.referrer
   }
 
-  // ✅ NEW: Debug method to check analytics status
   debugStatus(): void {
-    console.log('🔍 Analytics Debug Information:');
-    console.log('- Mixpanel token:', process.env.NEXT_PUBLIC_MIXPANEL_TOKEN ? '✅ Set' : '❌ Missing');
-    console.log('- Mixpanel initialized:', this.mixpanelInitialized);
-    console.log('- Supabase service key:', process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ Set' : '❌ Missing (using anon key)');
-    console.log('- Session ID:', this.sessionId);
-    console.log('- Pages visited:', this.pagesVisited);
-    console.log('- Actions count:', this.actionsCount);
-    console.log('- Environment:', process.env.NODE_ENV);
+    console.log('🔍 Analytics Debug Information:')
+    console.log('- Mixpanel token:', process.env.NEXT_PUBLIC_MIXPANEL_TOKEN ? '✅ Set' : '❌ Missing')
+    console.log('- Mixpanel initialized:', this.mixpanelInitialized)
+    console.log('- Session ID:', this.sessionId)
+    console.log('- Pages visited:', this.pagesVisited)
+    console.log('- Actions count:', this.actionsCount)
+    console.log('- Environment:', process.env.NODE_ENV)
+    console.log('- Using API routes: ✅ Yes (secure!)')
+    console.log('- Session start:', this.sessionStart.toISOString())
     
     if (typeof window !== 'undefined' && this.mixpanel) {
       console.log('- Mixpanel functions available:', {
         track: typeof this.mixpanel.track === 'function',
         identify: typeof this.mixpanel.identify === 'function',
         people: !!this.mixpanel.people
-      });
+      })
     }
   }
 }
