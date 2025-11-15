@@ -1,16 +1,16 @@
-// app/page.tsx - Updated with ProgressiveLoadingState and analytics tracking
+// app/page.tsx - Updated UI to match AI Coach design
 'use client'
 
 import React, { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { AuthService } from '@/lib/auth'
-import { analytics } from '@/lib/analytics' // ✅ NEW: Import analytics
+import { analytics } from '@/lib/analytics'
 import SocialSageMobile from '@/components/mobile/SocialSageMobile'
 import AccountDataManagement from '@/components/AccountDataManagement'
-import ProgressiveLoadingState from '@/components/ProgressiveLoadingState' // ✅ NEW: Import enhanced loading
+import ProgressiveLoadingState from '@/components/ProgressiveLoadingState'
 import { InstagramAccount } from '@/types/instagram'
 import { User } from '@supabase/supabase-js'
-import OnboardingWrapper from '@/components/onboarding/OnboardingWrapper'
+import { Sparkles, Lock, FileText, LogOut, Database } from 'lucide-react'
 
 export default function HomePage() {
   const [user, setUser] = useState<User | null>(null)
@@ -31,13 +31,11 @@ export default function HomePage() {
   useEffect(() => {
     console.log('🔍 Starting auth check...')
     
-    // ✅ NEW: Track page load start
     analytics.track('App Load Started', {
       timestamp: new Date().toISOString(),
       user_agent: typeof window !== 'undefined' ? navigator.userAgent : undefined
     })
     
-    // Get initial session
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       console.log('📋 Session check result:')
       console.log('- Session exists:', !!session)
@@ -50,7 +48,6 @@ export default function HomePage() {
       if (session?.user) {
         console.log('✅ User found, loading Instagram...')
         
-        // ✅ NEW: Track successful auth check
         analytics.identifyUser({
           userId: session.user.id,
           email: session.user.email || undefined
@@ -64,7 +61,6 @@ export default function HomePage() {
       } else {
         console.log('❌ No user, stopping loading')
         
-        // ✅ NEW: Track no user found
         analytics.track('Auth Check - No User Found')
         
         setIsLoading(false)
@@ -72,7 +68,6 @@ export default function HomePage() {
     }).catch(error => {
       console.error('❌ Session check failed:', error)
       
-      // ✅ NEW: Track auth check error
       analytics.track('Auth Check Failed', {
         error_message: error.message || 'Unknown error'
       })
@@ -80,12 +75,10 @@ export default function HomePage() {
       setIsLoading(false)
     })
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('🔄 Auth state changed:', event, !!session?.user)
         
-        // ✅ NEW: Track auth state changes
         analytics.track('Auth State Changed', {
           event_type: event,
           has_user: !!session?.user,
@@ -112,7 +105,6 @@ export default function HomePage() {
       const account = await AuthService.getActiveInstagramAccount(userId)
       console.log('📸 Instagram account result:', !!account, account?.username)
       
-      // ✅ NEW: Track Instagram account load result
       analytics.track('Instagram Account Load Result', {
         has_account: !!account,
         username: account?.username,
@@ -123,7 +115,6 @@ export default function HomePage() {
     } catch (error) {
       console.error('❌ Error loading Instagram account:', error)
       
-      // ✅ NEW: Track Instagram account load error
       analytics.track('Instagram Account Load Error', {
         error_message: error instanceof Error ? error.message : 'Unknown error',
         user_id: userId
@@ -148,7 +139,6 @@ export default function HomePage() {
       return
     }
 
-    // Validate password for signup only
     if (isSignUp) {
       const passwordError = validatePassword(password);
       if (passwordError) {
@@ -158,7 +148,6 @@ export default function HomePage() {
       }
     }
 
-    // ✅ NEW: Track auth attempt start
     analytics.track('Auth Attempt Started', {
       auth_type: isSignUp ? 'signup' : 'signin',
       email: email
@@ -177,7 +166,6 @@ export default function HomePage() {
         if (data?.user && !data.session) {
           setAuthSuccess('Please check your email and click the confirmation link to complete signup.')
           
-          // ✅ NEW: Track signup confirmation needed
           analytics.track('Signup - Email Confirmation Required', {
             email: email,
             user_id: data.user.id
@@ -185,33 +173,31 @@ export default function HomePage() {
         } else {
           console.log('✅ Sign up successful')
           
-          // ✅ NEW: Track successful signup
           analytics.trackSignup(data.user!.id, {
             source: 'email',
             referralUrl: typeof window !== 'undefined' ? document.referrer : undefined,
             utmParams: analytics.getUtmParams()
           })
-          // ✅ NEW: Send welcome email
-if (data?.user) {
-  try {
-    await fetch('/api/send-welcome-email', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        userEmail: email,
-        userName: email.split('@')[0], // Use email prefix as name for now
-        userId: data.user.id,
-      }),
-    });
-    
-    console.log('✅ Welcome email queued');
-  } catch (emailError) {
-    console.error('❌ Welcome email failed:', emailError);
-    // Don't block signup if email fails - just log the error
-  }
-}
+
+          if (data?.user) {
+            try {
+              await fetch('/api/send-welcome-email', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  userEmail: email,
+                  userName: email.split('@')[0],
+                  userId: data.user.id,
+                }),
+              });
+              
+              console.log('✅ Welcome email queued');
+            } catch (emailError) {
+              console.error('❌ Welcome email failed:', emailError);
+            }
+          }
         }
       } else {
         console.log('🔐 Starting email sign in...')
@@ -223,7 +209,6 @@ if (data?.user) {
         if (error) throw error
         console.log('✅ Sign in successful')
         
-        // ✅ NEW: Track successful signin
         analytics.track('Signin Successful', {
           email: email
         })
@@ -232,7 +217,6 @@ if (data?.user) {
       console.error('❌ Auth error:', error)
       setAuthError(error.message || 'Authentication failed')
       
-      // ✅ NEW: Track auth error
       analytics.track('Auth Error', {
         auth_type: isSignUp ? 'signup' : 'signin',
         error_message: error.message || 'Authentication failed',
@@ -276,21 +260,19 @@ if (data?.user) {
     if (!/[0-9]/.test(password)) {
       return 'Password must contain at least one number';
     }
-    return null; // Valid password
+    return null;
   };
 
   const handleConnectInstagram = () => {
     console.log('📸 Starting Instagram connection...')
     console.log('- Current user:', !!user, user?.id)
     
-    // ✅ NEW: Track Instagram connection attempt
     analytics.track('Instagram Connection Started', {
       user_id: user?.id,
       user_email: user?.email
     }, user?.id)
     
     if (user?.id) {
-      // Store user ID in multiple places as backup
       sessionStorage.setItem('socialsage_user_id', user.id)
       sessionStorage.setItem('socialsage_user_email', user.email || '')
       localStorage.setItem('socialsage_user_id_backup', user.id)
@@ -306,7 +288,6 @@ if (data?.user) {
     } else {
       console.error('❌ No user ID to store')
       
-      // ✅ NEW: Track missing user error
       analytics.track('Instagram Connection Error - No User ID')
       return
     }
@@ -315,7 +296,6 @@ if (data?.user) {
   const handleLogout = async () => {
     console.log('🚪 Logging out...')
     
-    // ✅ NEW: Track logout attempt
     analytics.track('Logout Started', {
       user_id: user?.id,
       had_instagram: !!instagramAccount
@@ -330,7 +310,6 @@ if (data?.user) {
       if (error) {
         console.error('❌ Logout error:', error)
         
-        // ✅ NEW: Track logout error
         analytics.track('Logout Error', {
           error_message: error.message,
           user_id: user?.id
@@ -338,7 +317,6 @@ if (data?.user) {
       } else {
         console.log('✅ Logged out successfully')
         
-        // ✅ NEW: Track successful logout
         analytics.track('Logout Successful', {
           user_id: user?.id
         }, user?.id)
@@ -355,7 +333,6 @@ if (data?.user) {
     } catch (error) {
       console.error('❌ Error during logout:', error)
       
-      // ✅ NEW: Track logout exception
       analytics.track('Logout Exception', {
         error_message: error instanceof Error ? error.message : 'Unknown error',
         user_id: user?.id
@@ -364,7 +341,6 @@ if (data?.user) {
   }
 
   const handleDataManagementAccess = () => {
-    // ✅ NEW: Track data management access
     analytics.track('Data Management Accessed', {
       user_id: user?.id
     }, user?.id)
@@ -372,21 +348,17 @@ if (data?.user) {
     setShowDataManagement(true)
   }
 
-  // ✅ UPDATED: Enhanced loading state with analytics tracking
+  // Loading state
   if (isLoading) {
     console.log('⏳ Showing loading state')
     return (
-      <div className="w-full min-h-screen bg-white flex flex-col">
-        <ProgressiveLoadingState
-          isLoading={isLoading}
-          loadingMessage="Loading your account..."
-          className="flex-1"
-          userId={user?.id}
-          loadingContext="initial_app_load"
-        >
-          {/* Keep your existing loading UI */}
-          <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-        </ProgressiveLoadingState>
+      <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-purple-900 to-pink-900 flex items-center justify-center">
+        <div className="bg-white/10 backdrop-blur-xl rounded-3xl border border-white/20 p-8 text-center">
+          <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
+            <div className="animate-spin w-6 h-6 border-2 border-white border-t-transparent rounded-full"></div>
+          </div>
+          <p className="text-white/80 text-lg">Loading your account...</p>
+        </div>
       </div>
     )
   }
@@ -400,27 +372,32 @@ if (data?.user) {
   if (!user) {
     console.log('🔐 Showing login page - no user')
     return (
-      <div className="w-full min-h-screen bg-white flex flex-col">
-        <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-purple-900 to-pink-900">
+        <div className="flex flex-col items-center justify-center min-h-screen p-6">
+          {/* Header */}
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">SocialSage</h1>
-            <p className="text-gray-600">Your Instagram analytics companion</p>
+            <div className="w-20 h-20 bg-gradient-to-br from-purple-400 to-pink-500 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-2xl">
+              <Sparkles className="w-10 h-10 text-white" />
+            </div>
+            <h1 className="text-4xl md:text-5xl font-serif text-white mb-2">
+              Social<span className="italic">Sage</span>
+            </h1>
+            <p className="text-white/70 text-lg">Your Instagram analytics companion</p>
           </div>
           
-          <div className="w-full max-w-xs">
-            {/* Toggle between Sign In / Sign Up */}
-            <div className="flex mb-6">
+          <div className="w-full max-w-md">
+            {/* Auth Toggle */}
+            <div className="bg-white/10 backdrop-blur-md rounded-full p-1 flex mb-6 border border-white/20">
               <button
                 onClick={() => {
                   setIsSignUp(false); 
                   setAuthError('');
-                  // ✅ NEW: Track auth mode switch
                   analytics.track('Auth Mode Switch', { mode: 'signin' });
                 }}
-                className={`flex-1 py-2 text-sm font-medium rounded-l-lg ${
+                className={`flex-1 py-3 text-sm font-semibold rounded-full transition-all ${
                   !isSignUp 
-                    ? 'bg-blue-500 text-white' 
-                    : 'bg-gray-200 text-gray-700'
+                    ? 'bg-white text-purple-900 shadow-lg' 
+                    : 'text-white hover:text-white/80'
                 }`}
               >
                 Sign In
@@ -429,19 +406,19 @@ if (data?.user) {
                 onClick={() => {
                   setIsSignUp(true); 
                   setAuthError('');
-                  // ✅ NEW: Track auth mode switch
                   analytics.track('Auth Mode Switch', { mode: 'signup' });
                 }}
-                className={`flex-1 py-2 text-sm font-medium rounded-r-lg ${
+                className={`flex-1 py-3 text-sm font-semibold rounded-full transition-all ${
                   isSignUp 
-                    ? 'bg-blue-500 text-white' 
-                    : 'bg-gray-200 text-gray-700'
+                    ? 'bg-white text-purple-900 shadow-lg' 
+                    : 'text-white hover:text-white/80'
                 }`}
               >
                 Sign Up
               </button>
             </div>
 
+            {/* Auth Form */}
             <form onSubmit={handleEmailAuth} className="space-y-4">
               <div>
                 <input
@@ -449,7 +426,7 @@ if (data?.user) {
                   placeholder="Email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  className="w-full px-6 py-4 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-white/50 text-white placeholder-white/50 transition-all"
                   required
                 />
               </div>
@@ -460,70 +437,65 @@ if (data?.user) {
                   placeholder="Password (8+ chars, uppercase, lowercase, number)"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  className="w-full px-6 py-4 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-white/50 text-white placeholder-white/50 transition-all"
                   minLength={8}
                   required
                 />
               </div>
 
-              {/* Forgot Password Link - only show for Sign In */}
+              {/* Forgot Password Link */}
               {!isSignUp && (
                 <div className="text-right">
                   <button
                     type="button"
                     onClick={handleForgotPassword}
-                    className="text-sm text-blue-600 hover:text-blue-800 underline"
+                    className="text-sm text-white/80 hover:text-white underline transition-colors"
                   >
                     Forgot your password?
                   </button>
                 </div>
               )}
 
+              {/* Error/Success Messages */}
               {authError && (
-                <div className="text-red-500 text-sm text-center bg-red-50 p-2 rounded-lg">
+                <div className="bg-red-500/20 border border-red-400/30 backdrop-blur-sm text-red-200 text-sm text-center p-3 rounded-xl">
                   {authError}
                 </div>
               )}
 
               {authSuccess && (
-                <div className="text-blue-600 text-sm text-center bg-blue-50 p-2 rounded-lg border border-blue-200">
+                <div className="bg-blue-500/20 border border-blue-400/30 backdrop-blur-sm text-blue-200 text-sm text-center p-3 rounded-xl">
                   {authSuccess}
                 </div>
               )}
 
-              {/* ✅ UPDATED: Enhanced auth loading state */}
+              {/* Submit Button */}
               {authLoading ? (
-                <ProgressiveLoadingState
-                  isLoading={authLoading}
-                  loadingMessage={isSignUp ? "Creating your account..." : "Signing you in..."}
-                  className="w-full py-3"
-                  loadingContext={isSignUp ? "user_signup" : "user_signin"}
-                >
-                  <div className="flex items-center justify-center space-x-2">
-                    <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
-                    <span className="text-white text-sm">
-                      {isSignUp ? "Creating account..." : "Signing in..."}
-                    </span>
-                  </div>
-                </ProgressiveLoadingState>
+                <div className="w-full bg-white/20 backdrop-blur-md rounded-2xl py-4 flex items-center justify-center border border-white/30">
+                  <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full mr-3"></div>
+                  <span className="text-white font-semibold">
+                    {isSignUp ? "Creating account..." : "Signing in..."}
+                  </span>
+                </div>
               ) : (
                 <button
                   type="submit"
-                  className="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-2xl py-3 font-medium hover:shadow-lg transition-all"
+                  className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white rounded-2xl py-4 font-semibold text-lg shadow-lg hover:shadow-xl transition-all transform hover:scale-[1.02]"
                 >
-                  {isSignUp ? 'Sign Up' : 'Sign In'}
+                  {isSignUp ? 'Create Account' : 'Sign In'}
                 </button>
               )}
             </form>
 
-            <div className="text-center mt-4 space-y-2">
-              <p className="text-xs text-gray-600">
+            {/* Footer Links */}
+            <div className="mt-6 space-y-3 text-center">
+              <p className="text-xs text-white/60 leading-relaxed">
                 By {isSignUp ? 'creating an account' : 'signing in'}, you agree to our{' '}
                 <a 
                   href="/privacy" 
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-800 underline font-medium"
+                  className="text-white/90 hover:text-white underline font-medium transition-colors"
                 >
                   Privacy Policy
                 </a>
@@ -532,31 +504,32 @@ if (data?.user) {
                   href="/terms" 
                   target="_blank"
                   rel="noopener noreferrer" 
-                  className="text-blue-600 hover:text-blue-800 underline font-medium"
+                  className="text-white/90 hover:text-white underline font-medium transition-colors"
                 >
                   Terms of Service
                 </a>
               </p>
 
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-white/50">
                 {isSignUp 
                   ? 'Create an account to connect your Instagram and start tracking your performance'
                   : 'Sign in to connect your Instagram account and start tracking your performance'
                 }
               </p>
 
-              {/* Data management link for non-users */}
-              <div className="pt-4 border-t border-gray-200 mt-4">
-                <p className="text-xs text-gray-500 mb-2">
+              {/* Data Deletion Link */}
+              <div className="pt-4 border-t border-white/20 mt-4">
+                <p className="text-xs text-white/60 mb-2">
                   Need to delete your data?
                 </p>
                 <a 
-  href="/data-deletion"
-  target="_blank"
-  rel="noopener noreferrer"
-  className="text-blue-600 hover:text-blue-800 underline text-xs font-medium"
->
-                  📄 View Data Deletion Instructions
+                  href="/data-deletion"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-white/90 hover:text-white underline text-xs font-medium transition-colors"
+                >
+                  <FileText className="w-3 h-3" />
+                  View Data Deletion Instructions
                 </a>
               </div>
             </div>
@@ -570,43 +543,46 @@ if (data?.user) {
   if (!instagramAccount) {
     console.log('📸 Showing Instagram connect page - user exists but no Instagram')
     return (
-      <div className="w-full min-h-screen bg-white flex flex-col">
-        <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-br from-blue-50 to-purple-50">
-          {/* Header with logout and data management */}
-          <div className="absolute top-4 right-4 flex space-x-2">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-purple-900 to-pink-900">
+        <div className="flex flex-col items-center justify-center min-h-screen p-6">
+          {/* Header with Actions */}
+          <div className="absolute top-4 right-4 flex gap-2">
             <button
               onClick={handleDataManagementAccess}
-              className="bg-gray-500 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              className="bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white px-4 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2"
             >
+              <Database className="w-4 h-4" />
               Manage Data
             </button>
             <button
               onClick={handleLogout}
-              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              className="bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 text-white px-4 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2"
             >
+              <LogOut className="w-4 h-4" />
               Logout
             </button>
           </div>
           
+          {/* Main Content */}
           <div className="text-center mb-8">
-            <div className="w-20 h-20 bg-gradient-to-br from-pink-500 to-orange-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-              <span className="text-white text-3xl">📸</span>
+            <div className="w-24 h-24 bg-gradient-to-br from-pink-500 to-orange-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-2xl">
+              <span className="text-white text-4xl">📸</span>
             </div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-3">Connect Instagram</h1>
-            <p className="text-gray-600 text-lg">Connect your Instagram account to start analyzing your performance</p>
-            <div className="mt-3 inline-flex items-center px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-              <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">Connect Instagram</h1>
+            <p className="text-white/80 text-lg mb-4">Connect your Instagram account to start analyzing your performance</p>
+            <div className="inline-flex items-center px-4 py-2 bg-green-500/20 border border-green-400/30 backdrop-blur-sm text-green-200 rounded-full text-sm font-medium">
+              <span className="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></span>
               Signed in as: {user.email}
             </div>
           </div>
 
-          {/* Privacy Notice for Meta Compliance */}
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6 mb-8 w-full max-w-md shadow-sm">
-            <h3 className="font-bold text-blue-900 mb-3 flex items-center">
-              <span className="mr-2">🔒</span>
+          {/* Privacy Notice */}
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 mb-8 w-full max-w-md">
+            <h3 className="font-bold text-white mb-3 flex items-center gap-2">
+              <Lock className="w-5 h-5" />
               Instagram Data Usage
             </h3>
-            <p className="text-blue-800 text-sm mb-4 leading-relaxed">
+            <p className="text-white/80 text-sm mb-4 leading-relaxed">
               When you connect Instagram, we'll access your profile data, posts, comments, 
               and analytics to provide personalized insights. We never share your data 
               with third parties.
@@ -615,27 +591,28 @@ if (data?.user) {
               href="/privacy" 
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center text-blue-700 hover:text-blue-900 underline text-sm font-medium transition-colors"
+              className="inline-flex items-center text-white hover:text-white/80 underline text-sm font-medium transition-colors gap-1"
             >
-              <span className="mr-1">📄</span>
+              <FileText className="w-4 h-4" />
               Read our full Privacy Policy
             </a>
           </div>
           
+          {/* Connect Button */}
           <div className="w-full max-w-md space-y-4">
             <button
               onClick={handleConnectInstagram}
-              className="w-full bg-gradient-to-r from-pink-500 to-orange-500 hover:from-pink-600 hover:to-orange-600 text-white rounded-2xl py-4 font-semibold text-lg shadow-lg hover:shadow-xl transition-all transform hover:scale-[1.02]"
+              className="w-full bg-gradient-to-r from-pink-500 to-orange-500 hover:from-pink-600 hover:to-orange-600 text-white rounded-2xl py-5 font-semibold text-lg shadow-2xl hover:shadow-pink-500/50 transition-all transform hover:scale-[1.02]"
             >
               Connect Instagram Account
             </button>
-            <p className="text-xs text-gray-500 text-center leading-relaxed">
+            <p className="text-xs text-white/60 text-center leading-relaxed">
               We'll redirect you to Instagram to authorize SocialSage. Your data is protected per our{' '}
               <a 
                 href="/privacy" 
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 hover:text-blue-700 underline font-medium transition-colors"
+                className="text-white/90 hover:text-white underline font-medium transition-colors"
               >
                 Privacy Policy
               </a>
@@ -647,24 +624,13 @@ if (data?.user) {
   }
 
   // Signed in with Instagram account - show the main dashboard
-console.log('🎉 Showing main app - user and Instagram connected')
+  console.log('🎉 Showing main app - user and Instagram connected')
 
-// ✅ NEW: Track successful app load
-analytics.track('App Fully Loaded', {
-  user_id: user.id,
-  instagram_username: instagramAccount.username,
-  load_time: Date.now() // You could calculate actual load time
-}, user.id)
+  analytics.track('App Fully Loaded', {
+    user_id: user.id,
+    instagram_username: instagramAccount.username,
+    load_time: Date.now()
+  }, user.id)
 
-return (
-  <OnboardingWrapper
-    userId={user.id}
-    userEmail={user.email || undefined}
-    instagramUsername={instagramAccount.username}
-    hasInstagramData={true}
-    analytics={analytics}
-  >
-    <SocialSageMobile />
-  </OnboardingWrapper>
-)
+  return <SocialSageMobile />
 }
